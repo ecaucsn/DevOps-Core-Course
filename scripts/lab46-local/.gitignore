@@ -1,0 +1,9 @@
+.ssh/
+authorized_keys
+.terraform/
+.terraformrc
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+crash.log
+mirror/
