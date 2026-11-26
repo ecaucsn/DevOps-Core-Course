@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DevOps Learning Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="top-inner">
+        <div class="title-row">
+          <h1>DevOps Learning Dashboard</h1>
+          <span class="subtitle">Курс DevOps Engineering: карта, чек-листы и прогресс</span>
+        </div>
+
+        <div class="progress">
+          <div class="progress-item labs">
+            <div id="lab-progress-text">0 / 18 лаб (0%)</div>
+            <div class="bar"><span id="lab-progress"></span></div>
+          </div>
+          <div class="progress-item tasks">
+            <div id="task-progress-text">0 / 0 задач (0%)</div>
+            <div class="bar"><span id="task-progress"></span></div>
+          </div>
+        </div>
+
+        <div class="controls">
+          <input id="search" class="search" type="search" placeholder="Поиск по лабам, темам, задачам..." />
+          <div class="actions">
+            <button type="button" id="export">Экспорт</button>
+            <button type="button" id="import">Импорт</button>
+            <button type="button" id="reset" class="danger">Сброс</button>
+            <input id="import-file" type="file" accept="application/json" hidden />
+          </div>
+        </div>
+
+        <div id="filters" class="filters"></div>
+      </div>
+    </header>
+
+    <main>
+      <div class="summary">
+        <span>Готово лаб: <b id="done-labs">0</b></span>
+        <span>Выполнено задач: <b id="done-tasks">0</b></span>
+        <span>Код пишете вы — дашборд только навигация и трекер.</span>
+      </div>
+      <section id="labs" class="labs"></section>
+    </main>
+
+    <footer class="footer">
+      <p>
+        Источник истины — <code>labs/*.md</code>. Прогресс и заметки хранятся локально в браузере
+        (<code>localStorage</code>) и не покидают вашу машину. Экспортируйте JSON для бэкапа.
+      </p>
+      <p>
+        Запуск: из корня репозитория <code>python3 -m http.server 8010</code> →
+        <code>http://localhost:8010/study/</code>. Порт 8000 занят, поэтому 8010.
+      </p>
+    </footer>
+
+    <script src="data.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
