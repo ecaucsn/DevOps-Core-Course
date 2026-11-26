@@ -1,12 +1,6 @@
-# Student-produced artifacts — live in fork, not upstream
-app_python/
-app_go/
-k8s/
-ansible/
-terraform/
-monitoring/
+# В форке результаты лабораторных отслеживаются (в upstream эти каталоги
+# держатся в .gitignore, чтобы исходный репозиторий оставался чистым).
 submissions/
-.github/workflows/
 
 # Instructor-only reference submissions (dry-run outputs)
 refs/
