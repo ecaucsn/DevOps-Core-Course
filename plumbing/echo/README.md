@@ -1,24 +1,24 @@
-# Plumbing — `echo` service
+# Вспомогательный сервис — `echo`
 
-A tiny Go HTTP service shipped by the course as **instructor-maintained plumbing**.
-**You don't modify this code.** You deploy it alongside your own service starting in **Lab 9**.
+Крошечный HTTP-сервис на Go, поставляемый курсом как **вспомогательный сервис, поддерживаемый преподавателем**.
+**Вы не изменяете этот код.** Вы развёртываете его рядом со своим сервисом начиная с **лабораторной 9**.
 
-## Why it exists
+## Зачем он существует
 
-Through Lab 8 you ran a single Python service. When you reach Kubernetes (Lab 9),
-running a **second** pod alongside it is the smallest topology in which `Service`,
-kube-DNS, and cross-pod networking actually mean something. `echo` is that second pod.
+До лабораторной 8 включительно вы запускали один Python-сервис. Когда вы доходите до Kubernetes (лабораторная 9),
+запуск **второго** pod рядом с ним — минимальная топология, в которой `Service`,
+kube-DNS и сетевое взаимодействие между pod'ами реально что-то означают. `echo` — этот второй pod.
 
-## Endpoints
+## Эндпоинты
 
-| Path | Behaviour |
+| Путь | Поведение |
 |------|-----------|
-| `GET /ping` | Returns `pong\n` — minimal smoke test |
-| `* /echo` | Returns JSON containing the request body, headers, hostname, version, uptime, and a monotonic request counter — useful for verifying load balancing across replicas |
-| `GET /healthz` | Returns `ok` (200) — wire this into `readinessProbe` and `livenessProbe` |
-| `GET /metrics` | Prometheus text format — `echo_requests_total` counter + `echo_uptime_seconds` gauge |
+| `GET /ping` | Возвращает `pong\n` — минимальный smoke-тест |
+| `* /echo` | Возвращает JSON, содержащий тело запроса, заголовки, hostname, версию, uptime и монотонный счётчик запросов — полезно для проверки балансировки нагрузки между репликами |
+| `GET /healthz` | Возвращает `ok` (200) — подключите это к `readinessProbe` и `livenessProbe` |
+| `GET /metrics` | Текстовый формат Prometheus — счётчик `echo_requests_total` + gauge `echo_uptime_seconds` |
 
-## Local build
+## Локальная сборка
 
 ```bash
 cd plumbing/echo
@@ -28,17 +28,17 @@ curl -s localhost:8081/ping
 curl -s localhost:8081/echo -d 'hello'
 ```
 
-## Used in
+## Где используется
 
-- **Lab 9** — deployed as the 2nd service in your `default` namespace
-- **Lab 10** — packaged as a subchart of your Helm chart (bonus track)
-- **Labs 13–14** — second target of ArgoCD ApplicationSet + Argo Rollouts canary
+- **Лабораторная 9** — развёртывается как 2-й сервис в вашем пространстве имён `default`
+- **Лабораторная 10** — упаковывается как субчарт вашего Helm-чарта (бонусный трек)
+- **Лабораторные 13–14** — вторая цель ArgoCD ApplicationSet + канареечный Argo Rollouts
 
-The pre-built image is published from the course repo CI to `ghcr.io/inno-devops-labs/echo:vX.Y.Z`.
+Предварительно собранный образ публикуется из CI репозитория курса в `ghcr.io/inno-devops-labs/echo:vX.Y.Z`.
 
-## Configuration
+## Конфигурация
 
-| Env var | Default | Purpose |
+| Переменная окружения | По умолчанию | Назначение |
 |---------|---------|---------|
-| `PORT` | `8081` | Listen port |
-| `VERSION` | `v1.0.0` | Reported in `/echo` JSON; useful for canary verification |
+| `PORT` | `8081` | Порт прослушивания |
+| `VERSION` | `v1.0.0` | Сообщается в JSON `/echo`; полезно для проверки канарейки |

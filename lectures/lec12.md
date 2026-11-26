@@ -1,12 +1,12 @@
-# 📌 Lecture 12 — Configuration & Storage: ConfigMaps and Persistent Volumes
+# 📌 Лекция 12 — Конфигурация и хранилище: ConfigMap'ы и постоянные тома
 
-## 📍 Slide 1 – 💾 Welcome to Config + Storage
+## 📍 Слайд 1 – 💾 Добро пожаловать в конфиг + хранилище
 
-* 🌍 **Lecture 11 hid your secrets** in Kubernetes Secrets + OpenBao. But not every value is a secret — log levels, feature flags, DB hostnames, NGINX configs — these belong in **ConfigMaps**.
-* 📦 **The 12-Factor rule (Factor III):** "Store config in the environment, not in the code." One image, three environments, zero rebuilds.
-* 💾 And then there's **state**. Containers are ephemeral; user uploads, database files, and visit counters need storage that **survives a pod restart**. Enter `PersistentVolumeClaim`.
-* 🎯 This lecture: ConfigMaps (injection patterns + immutability), PVs/PVCs (claim model + dynamic provisioning), and the hot-reload trap.
-* 🔗 **Tie-in to Lab 12:** add a `config.json` ConfigMap mounted as a file, an env-var ConfigMap injected via `envFrom`, and a PVC-backed `/data/visits` counter that survives `kubectl delete pod`.
+* 🌍 **Лекция 11 спрятала ваши секреты** в Kubernetes Secrets + OpenBao. Но не каждое значение — секрет: уровни логирования, feature-флаги, имена хостов БД, конфиги NGINX — всё это относится к **ConfigMap'ам**.
+* 📦 **Правило 12-Factor (фактор III):** "Храните конфигурацию в окружении, а не в коде." Один образ, три среды, ноль пересборок.
+* 💾 И ещё есть **состояние**. Контейнеры эфемерны; пользовательские загрузки, файлы баз данных и счётчики посещений нуждаются в хранилище, которое **переживает перезапуск pod'а**. Встречайте `PersistentVolumeClaim`.
+* 🎯 Эта лекция: ConfigMap'ы (паттерны внедрения + неизменяемость), PV/PVC (модель заявок + динамический провижининг) и ловушка горячей перезагрузки.
+* 🔗 **Связь с лабораторной 12:** добавьте ConfigMap `config.json`, смонтированный как файл, ConfigMap с переменными окружения, внедряемый через `envFrom`, и счётчик `/data/visits` на PVC, переживающий `kubectl delete pod`.
 
 ```mermaid
 flowchart LR
@@ -20,37 +20,37 @@ flowchart LR
 
 ---
 
-## 📍 Slide 2 – 🎯 Learning Outcomes
+## 📍 Слайд 2 – 🎯 Результаты обучения
 
-| # | Outcome |
+| # | Результат |
 |---|---------|
-| 1 | 📋 Create ConfigMaps from literals, files, and YAML; pick the right injection pattern |
-| 2 | 🚪 Inject config three ways: single env var, `envFrom`, volume mount |
-| 3 | 🔒 Use `immutable: true` ConfigMaps where appropriate; understand the perf win + hot-reload cost |
-| 4 | 💾 Tell `PersistentVolume` (cluster-scoped) from `PersistentVolumeClaim` (namespaced) |
-| 5 | 🤖 Use `StorageClass` for dynamic provisioning; pick the right `AccessMode` and `reclaimPolicy` |
-| 6 | 🔄 Implement hot-reload via checksum annotation, Reloader, or app-level fsnotify |
+| 1 | 📋 Создавать ConfigMap'ы из литералов, файлов и YAML; выбирать правильный паттерн внедрения |
+| 2 | 🚪 Внедрять конфиг тремя способами: одна переменная окружения, `envFrom`, монтирование тома |
+| 3 | 🔒 Использовать ConfigMap'ы с `immutable: true` там, где уместно; понимать выигрыш в производительности + стоимость горячей перезагрузки |
+| 4 | 💾 Отличать `PersistentVolume` (уровень кластера) от `PersistentVolumeClaim` (уровень пространства имён) |
+| 5 | 🤖 Использовать `StorageClass` для динамического провижининга; выбирать правильный `AccessMode` и `reclaimPolicy` |
+| 6 | 🔄 Реализовать горячую перезагрузку через аннотацию с контрольной суммой, Reloader или fsnotify на уровне приложения |
 
-**Tech stack pinned for May 2026:** Kubernetes **1.36 "Haru"** (released Apr 22 2026). CSI drivers: **AWS EBS CSI**, **GCE PD CSI**, **local-path-provisioner** (for `kind`). ConfigMap immutability stable since **1.21**. `ReadWriteOncePod` GA since **1.29**. VolumeSnapshot GA since **1.20**.
-
----
-
-## 📍 Slide 3 – ❓ Why Baked-In Config Is Bad
-
-Imagine you bake `DATABASE_URL=postgres://prod-db:5432/app` into the image. Now:
-
-* 🔄 **Three environments → three image builds.** CI runs 3× per merge. Test coverage on dev image ≠ prod image.
-* 🐛 **One typo, one rebuild.** Want to lower `LOG_LEVEL` from `DEBUG` to `INFO`? Build, scan, sign, push, deploy. 10 minutes for a string change.
-* 💀 **Secrets in image layers.** `docker history` reveals every `ENV DB_PASSWORD=...`. Layers stay in the registry forever.
-* 🚦 **Promotion ≠ promotion.** "Dev container goes to prod" — except dev's image has dev's config, so you actually rebuild for prod. The artifact you tested is not the artifact you ship.
-
-> 🔥 **The 12-Factor App** (Heroku, 2011) made this universal: **the artifact is the same across environments; configuration is injected at runtime**. Containers + Kubernetes operationalize that rule with ConfigMaps and Secrets.
+**Технологический стек, зафиксированный на май 2026:** Kubernetes **1.36 "Haru"** (выпущен 22 апреля 2026). CSI-драйверы: **AWS EBS CSI**, **GCE PD CSI**, **local-path-provisioner** (для `kind`). Неизменяемость ConfigMap стабильна с **1.21**. `ReadWriteOncePod` GA с **1.29**. VolumeSnapshot GA с **1.20**.
 
 ---
 
-## 📍 Slide 4 – 📋 What a ConfigMap Actually Is
+## 📍 Слайд 3 – ❓ Почему конфиг, запечённый в образ, — это плохо
 
-A `ConfigMap` is a **namespaced** Kubernetes object holding non-confidential key-value data. The API is in core `v1` (stable since 1.2 — older than most of your students).
+Представьте, что вы запекаете `DATABASE_URL=postgres://prod-db:5432/app` в образ. Теперь:
+
+* 🔄 **Три среды → три сборки образа.** CI запускается 3× на каждый merge. Покрытие тестами на dev-образе ≠ на prod-образе.
+* 🐛 **Одна опечатка — одна пересборка.** Хотите понизить `LOG_LEVEL` с `DEBUG` до `INFO`? Сборка, сканирование, подпись, отправка, развёртывание. 10 минут ради изменения строки.
+* 💀 **Секреты в слоях образа.** `docker history` раскрывает каждый `ENV DB_PASSWORD=...`. Слои остаются в реестре навсегда.
+* 🚦 **Промоушен ≠ промоушен.** "Dev-контейнер идёт в прод" — только у dev-образа конфиг dev'а, так что вы на самом деле пересобираете для прода. Артефакт, который вы тестировали, — не артефакт, который вы выпускаете.
+
+> 🔥 **The 12-Factor App** (Heroku, 2011) сделал это универсальным: **артефакт одинаков во всех средах; конфигурация внедряется во время выполнения**. Контейнеры + Kubernetes реализуют это правило с помощью ConfigMap'ов и Secret'ов.
+
+---
+
+## 📍 Слайд 4 – 📋 Что такое ConfigMap на самом деле
+
+`ConfigMap` — это **привязанный к пространству имён** объект Kubernetes, хранящий неконфиденциальные данные ключ-значение. API находится в ядре `v1` (стабилен с 1.2 — старше большинства ваших студентов).
 
 ```yaml
 apiVersion: v1
@@ -69,13 +69,13 @@ binaryData:                   # ← base64 for non-UTF-8 (rare)
   tls.crt: <base64-blob>
 ```
 
-* 📏 **Size limit: 1 MiB** per object (etcd value limit). Hit it? Split into multiple ConfigMaps or use a real config-distribution system.
-* 🚫 **Not encrypted at rest by default.** Anyone with `get configmap` RBAC reads everything. Plain text in etcd.
-* ❌ **Not for secrets.** DB passwords, API keys, TLS keys → `Secret` (Lecture 11). Even though `Secret` is also base64 in etcd, the RBAC verbs and audit story are separate.
+* 📏 **Ограничение размера: 1 MiB** на объект (лимит значения etcd). Достигли? Разделите на несколько ConfigMap'ов или используйте настоящую систему распространения конфигурации.
+* 🚫 **Не зашифрован в состоянии покоя по умолчанию.** Любой с RBAC `get configmap` читает всё. Открытый текст в etcd.
+* ❌ **Не для секретов.** Пароли БД, API-ключи, TLS-ключи → `Secret` (лекция 11). Хотя `Secret` тоже base64 в etcd, глаголы RBAC и история аудита отдельные.
 
 ---
 
-## 📍 Slide 5 – 🛠️ Three Ways to Create One
+## 📍 Слайд 5 – 🛠️ Три способа создать ConfigMap
 
 ```bash
 # 1️⃣ From literals — fastest for one-off values
@@ -94,11 +94,11 @@ kubectl create configmap app-env --from-env-file=./prod.env
 kubectl apply -f configmap.yaml
 ```
 
-> ✅ **In real life only `4️⃣` is used.** `create` is for ad-hoc debugging. Everything in production is declarative YAML in a Helm chart or Kustomize overlay, applied via GitOps (Lecture 13).
+> ✅ **В реальной жизни используется только `4️⃣`.** `create` — для разовой отладки. Всё в продакшне — это декларативный YAML в Helm chart или overlay Kustomize, применяемый через GitOps (лекция 13).
 
 ---
 
-## 📍 Slide 6 – 🚪 Injection Pattern 1: Single Env Var
+## 📍 Слайд 6 – 🚪 Паттерн внедрения 1: одна переменная окружения
 
 ```yaml
 spec:
@@ -113,16 +113,16 @@ spec:
               optional: false              # ← pod won't start if key missing
 ```
 
-When to use it:
-* 🎯 You want to **rename** the env var (`LOG_LEVEL` in CM → `APP_LOG_LEVEL` in container)
-* 🎯 You only need **a couple of keys** from a large ConfigMap
-* 🎯 You want explicit per-key control over `optional` behavior
+Когда использовать:
+* 🎯 Вы хотите **переименовать** переменную окружения (`LOG_LEVEL` в CM → `APP_LOG_LEVEL` в контейнере)
+* 🎯 Вам нужно только **пара ключей** из большого ConfigMap'а
+* 🎯 Вы хотите явный контроль `optional` для каждого ключа
 
-> ⚠️ **Env vars are baked at pod start.** Update the ConfigMap, the running pod still sees the old value until it restarts. Always.
+> ⚠️ **Переменные окружения запекаются при старте pod'а.** Обновите ConfigMap, работающий pod всё равно видит старое значение до перезапуска. Всегда.
 
 ---
 
-## 📍 Slide 7 – 🚪 Injection Pattern 2: `envFrom` (Bulk)
+## 📍 Слайд 7 – 🚪 Паттерн внедрения 2: `envFrom` (массово)
 
 ```yaml
 spec:
@@ -139,15 +139,15 @@ spec:
             name: feature-flags
 ```
 
-* 🚀 **One line per source.** All keys in `app-env` become env vars verbatim.
-* 🚫 **Invalid env-var names are silently skipped** (e.g. keys with dots or leading digits). Stick to `[A-Z_][A-Z0-9_]*`.
-* 🏷️ **`prefix`** namespaces a ConfigMap when two sources have colliding keys.
+* 🚀 **Одна строка на источник.** Все ключи в `app-env` становятся переменными окружения дословно.
+* 🚫 **Невалидные имена переменных окружения молча пропускаются** (например, ключи с точками или начинающиеся с цифр). Придерживайтесь `[A-Z_][A-Z0-9_]*`.
+* 🏷️ **`prefix`** задаёт пространство имён для ConfigMap'а, когда у двух источников совпадают ключи.
 
-> 🔥 **Gotcha:** `envFrom` does *not* let you rename or filter keys. If your ConfigMap has 30 keys, the container gets all 30 env vars. Curate the ConfigMap, not the injection.
+> 🔥 **Ловушка:** `envFrom` *не* позволяет переименовывать или фильтровать ключи. Если в вашем ConfigMap'е 30 ключей, контейнер получает все 30 переменных окружения. Курируйте ConfigMap, а не внедрение.
 
 ---
 
-## 📍 Slide 8 – 🚪 Injection Pattern 3: Volume Mount
+## 📍 Слайд 8 – 🚪 Паттерн внедрения 3: монтирование тома
 
 ```yaml
 spec:
@@ -170,13 +170,13 @@ spec:
         #   subPath: nginx.conf
 ```
 
-* 📁 **Whole-directory mount** → kubelet reflects ConfigMap updates within ~`kubelet --sync-frequency` (default 60s) + cache TTL. Files appear via a `..data` symlink swap (atomic).
-* 🚫 **`subPath` is a one-shot copy** — file is materialized once at pod start and **never updates**. Trade-off: clean mount path, but lose live-reload.
-* 🎚️ **`defaultMode` / `mode`** control file permissions (default `0644`).
+* 📁 **Монтирование всего каталога** → kubelet отражает обновления ConfigMap в течение ~`kubelet --sync-frequency` (по умолчанию 60s) + TTL кеша. Файлы появляются через атомарную подмену симлинка `..data`.
+* 🚫 **`subPath` — это одноразовая копия** — файл материализуется один раз при старте pod'а и **никогда не обновляется**. Компромисс: чистый путь монтирования, но вы теряете живую перезагрузку.
+* 🎚️ **`defaultMode` / `mode`** управляют правами доступа к файлам (по умолчанию `0644`).
 
 ---
 
-## 📍 Slide 9 – 🔒 Immutable ConfigMaps (Stable in 1.21)
+## 📍 Слайд 9 – 🔒 Неизменяемые ConfigMap'ы (стабильно в 1.21)
 
 ```yaml
 apiVersion: v1
@@ -189,43 +189,43 @@ data:
   CACHE_TTL: "3600"
 ```
 
-Why it exists:
-* ⚡ **Perf:** kubelet stops `watch`ing the ConfigMap. At 10k Pods × 20 ConfigMaps = 200k fewer watches.
-* 🛡️ **Safety:** prevents accidental edits. `kubectl edit configmap app-config-v3` fails with "field is immutable".
+Зачем это существует:
+* ⚡ **Производительность:** kubelet перестаёт `watch`ить ConfigMap. При 10k Pod'ов × 20 ConfigMap'ов = на 200k меньше watch-подписок.
+* 🛡️ **Безопасность:** предотвращает случайные правки. `kubectl edit configmap app-config-v3` падает с "field is immutable".
 
-The pattern:
-* 🏷️ **Version in the name** — `app-config-v1`, `app-config-v2`, …
-* 🔁 **Deployment references the versioned name** — bumping `app-config-v2 → v3` is a Deployment template change → rolling update for free.
-* 🗑️ **Cleanup old versions** with a GC job once nothing references them.
+Паттерн:
+* 🏷️ **Версия в имени** — `app-config-v1`, `app-config-v2`, …
+* 🔁 **Deployment ссылается на версионированное имя** — переход `app-config-v2 → v3` — это изменение шаблона Deployment → раскатка обновления бесплатно.
+* 🗑️ **Очищайте старые версии** с помощью GC-задачи, когда на них ничего не ссылается.
 
-> 🔥 **Trade-off:** immutable kills hot-reload. If your app reads the file on a timer, immutable is fine. If you want zero-restart config swaps, stick with mutable + the patterns on Slide 16.
+> 🔥 **Компромисс:** неизменяемость убивает горячую перезагрузку. Если ваше приложение читает файл по таймеру, неизменяемость подходит. Если вы хотите переключать конфиг без перезапуска, придерживайтесь изменяемых + паттернов со слайда 16.
 
 ---
 
-## 📍 Slide 10 – 📊 ConfigMap vs Secret — Quick Diff
+## 📍 Слайд 10 – 📊 ConfigMap vs Secret — быстрый diff
 
-| Aspect | `ConfigMap` | `Secret` |
+| Аспект | `ConfigMap` | `Secret` |
 |---|---|---|
-| API kind | `v1.ConfigMap` | `v1.Secret` (typed: `Opaque`, `kubernetes.io/tls`, …) |
-| Storage in etcd | Plain text | Base64-encoded (NOT encryption — encryption-at-rest needs `EncryptionConfiguration`) |
-| Audience | Non-sensitive config | Passwords, tokens, certs |
-| RBAC verb | `get configmaps` | `get secrets` (usually more restricted) |
-| Volume tmpfs? | No (regular fs) | Yes (mounted as `tmpfs`, never touches disk) |
-| Size limit | 1 MiB | 1 MiB |
-| Immutable field | ✅ since 1.21 | ✅ since 1.21 |
+| Тип API | `v1.ConfigMap` | `v1.Secret` (типизированный: `Opaque`, `kubernetes.io/tls`, …) |
+| Хранение в etcd | Открытый текст | Base64-кодированный (НЕ шифрование — шифрование в состоянии покоя требует `EncryptionConfiguration`) |
+| Аудитория | Нечувствительная конфигурация | Пароли, токены, сертификаты |
+| Глагол RBAC | `get configmaps` | `get secrets` (обычно строже ограничен) |
+| Том tmpfs? | Нет (обычная ФС) | Да (монтируется как `tmpfs`, никогда не касается диска) |
+| Ограничение размера | 1 MiB | 1 MiB |
+| Поле immutable | ✅ с 1.21 | ✅ с 1.21 |
 
-> 🔥 **Rule of thumb:** if losing it tomorrow would force you to file a security incident, it's a Secret.
+> 🔥 **Правило большого пальца:** если потеря этого завтра заставит вас открыть инцидент безопасности, это Secret.
 
 ---
 
-## 📍 Slide 11 – 💾 Section Break — Why Storage is Hard
+## 📍 Слайд 11 – 💾 Раздел-пауза — почему хранилище сложное
 
-The container model is **immutable + ephemeral**:
-* 📦 Pod dies → its writable layer dies with it
-* 🔄 Rolling update → new pod, fresh empty filesystem
-* 🧭 Pod rescheduled to another node → previous node's local disk unreachable
+Модель контейнеров **неизменяемая + эфемерная**:
+* 📦 Pod умирает → его записываемый слой умирает вместе с ним
+* 🔄 Раскатка обновления → новый pod, свежая пустая файловая система
+* 🧭 Pod переназначен на другой узел → локальный диск предыдущего узла недоступен
 
-For **stateless** workloads (web, API) that's perfect. For **stateful** workloads (DB, file uploads, queues) it's a disaster:
+Для **stateless**-нагрузок (web, API) это идеально. Для **stateful**-нагрузок (БД, загрузки файлов, очереди) это катастрофа:
 
 ```mermaid
 flowchart LR
@@ -235,11 +235,11 @@ flowchart LR
   NodeB --> Empty[📭 No data!]
 ```
 
-Kubernetes' answer: **decouple the storage object from the pod**. The pod claims storage by name; whichever node runs the pod, the volume follows it.
+Ответ Kubernetes: **отвязать объект хранилища от pod'а**. Pod заявляет хранилище по имени; на каком бы узле ни запускался pod, том следует за ним.
 
 ---
 
-## 📍 Slide 12 – 🏗️ The PV / PVC / StorageClass Trio
+## 📍 Слайд 12 – 🏗️ Трио PV / PVC / StorageClass
 
 ```mermaid
 flowchart TB
@@ -252,17 +252,17 @@ flowchart TB
   Pod[📦 Pod] -->|mounts| PVC
 ```
 
-* 💾 **PVC (PersistentVolumeClaim)** — the *request*. "I want 10Gi, RWO, fast SSD." Lives in a namespace. Written by app authors.
-* 🗄️ **PV (PersistentVolume)** — the *resource*. Cluster-scoped (no namespace). Created by an admin (static) or provisioner (dynamic).
-* 📋 **StorageClass** — the *template*. "Here's how to provision new PVs of type `fast-ssd`." Cluster-scoped.
+* 💾 **PVC (PersistentVolumeClaim)** — *заявка*. "Мне нужно 10Gi, RWO, быстрый SSD." Живёт в пространстве имён. Пишется авторами приложений.
+* 🗄️ **PV (PersistentVolume)** — *ресурс*. Уровень кластера (без пространства имён). Создаётся администратором (статически) или провижионером (динамически).
+* 📋 **StorageClass** — *шаблон*. "Вот как провижионить новые PV типа `fast-ssd`." Уровень кластера.
 
-> 🎯 **Mental model:** PVC is to PV what a Pod is to a Node. The pod doesn't pick a node; the scheduler does. The PVC doesn't pick a PV; the binder does.
+> 🎯 **Ментальная модель:** PVC относится к PV так же, как Pod относится к Node. Pod не выбирает узел; это делает scheduler. PVC не выбирает PV; это делает binder.
 
 ---
 
-## 📍 Slide 13 – 🤖 Static vs Dynamic Provisioning
+## 📍 Слайд 13 – 🤖 Статический vs динамический провижининг
 
-**Static (pre-1.6 style, still valid):** an admin pre-creates PVs; PVCs bind to one that fits.
+**Статический (стиль до 1.6, всё ещё валиден):** администратор заранее создаёт PV; PVC привязывается к подходящему.
 
 ```yaml
 # Admin creates this once
@@ -275,7 +275,7 @@ spec:
   hostPath: {path: /mnt/data}        # ← demo only; never in prod
 ```
 
-**Dynamic (default since 1.6):** PVC names a `StorageClass`; the cluster auto-provisions a PV.
+**Динамический (по умолчанию с 1.6):** PVC указывает `StorageClass`; кластер автоматически провижионит PV.
 
 ```yaml
 apiVersion: storage.k8s.io/v1
@@ -291,49 +291,49 @@ volumeBindingMode: WaitForFirstConsumer    # ← bind only when a Pod uses the P
 allowVolumeExpansion: true
 ```
 
-> 🔥 **`WaitForFirstConsumer`** is what you want in multi-AZ clusters. Without it, the PV is provisioned in zone X but the Pod ends up scheduled to zone Y — and `kubectl describe pod` reads `volume node affinity conflict`. Welcome to debugging EBS at midnight.
+> 🔥 **`WaitForFirstConsumer`** — это то, что вам нужно в мульти-AZ кластерах. Без него PV провижионится в зоне X, а Pod оказывается запланированным в зону Y — и `kubectl describe pod` читает `volume node affinity conflict`. Добро пожаловать в отладку EBS в полночь.
 
 ---
 
-## 📍 Slide 14 – 🔓 Access Modes
+## 📍 Слайд 14 – 🔓 Режимы доступа
 
-| Mode | Abbrev | Meaning | Typical backend |
+| Режим | Сокр. | Значение | Типичный бэкенд |
 |---|---|---|---|
-| `ReadWriteOnce` | RWO | Mountable RW by one **node** (multiple Pods on that node OK) | EBS, GCE PD, Azure Disk |
-| `ReadOnlyMany` | ROX | Mountable RO by many nodes | NFS, S3-CSI, content-distribution |
-| `ReadWriteMany` | RWX | Mountable RW by many nodes simultaneously | NFS, EFS, Azure Files, CephFS |
-| `ReadWriteOncePod` | RWOP | Mountable RW by exactly **one Pod** in the whole cluster | Any CSI driver since K8s 1.29 GA |
+| `ReadWriteOnce` | RWO | Монтируется RW одним **узлом** (несколько Pod'ов на этом узле — OK) | EBS, GCE PD, Azure Disk |
+| `ReadOnlyMany` | ROX | Монтируется RO многими узлами | NFS, S3-CSI, распространение контента |
+| `ReadWriteMany` | RWX | Монтируется RW многими узлами одновременно | NFS, EFS, Azure Files, CephFS |
+| `ReadWriteOncePod` | RWOP | Монтируется RW ровно **одним Pod'ом** во всём кластере | Любой CSI-драйвер с K8s 1.29 GA |
 
-* 🔒 **`ReadWriteOncePod`** (GA in K8s 1.29) is stricter than RWO — RWO permits N pods on the same node; RWOP is exactly one pod, cluster-wide. Use for leader-election, single-writer DBs.
-* 🧨 **Cloud block storage is RWO only.** EBS, GCE PD, Azure Disk — they're block devices; the cloud kernel can't share them RW across hosts.
-* 📡 **Need RWX?** That's NFS, EFS, Azure Files, or CephFS. Slower, more expensive, eventually-consistent in places.
+* 🔒 **`ReadWriteOncePod`** (GA в K8s 1.29) строже RWO — RWO допускает N pod'ов на одном узле; RWOP — ровно один pod во всём кластере. Используйте для выбора лидера, БД с одним писателем.
+* 🧨 **Облачное блочное хранилище — только RWO.** EBS, GCE PD, Azure Disk — это блочные устройства; облачное ядро не может делить их RW между хостами.
+* 📡 **Нужен RWX?** Это NFS, EFS, Azure Files или CephFS. Медленнее, дороже, местами с согласованностью в конечном счёте.
 
 ---
 
-## 📍 Slide 15 – ♻️ Reclaim Policies
+## 📍 Слайд 15 – ♻️ Политики возврата
 
-When a PVC is deleted, what happens to the underlying disk?
+Когда PVC удаляется, что происходит с нижележащим диском?
 
-| Policy | Behavior | When to use |
+| Политика | Поведение | Когда использовать |
 |---|---|---|
-| `Delete` | PV and the backing disk are deleted (cloud volume vanishes) | Default for cloud SC; OK for caches & scratch |
-| `Retain` | PV remains; disk untouched. Operator must clean up manually | Databases, anything with valuable data |
-| `Recycle` | `rm -rf /thevolume/*` then makes PV available again | ⚠️ **Deprecated**, NFS/hostPath only, unsupported on CSI — don't use |
+| `Delete` | PV и нижележащий диск удаляются (облачный том исчезает) | По умолчанию для облачного SC; OK для кешей и временных данных |
+| `Retain` | PV остаётся; диск не тронут. Оператор должен очистить вручную | Базы данных, всё с ценными данными |
+| `Recycle` | `rm -rf /thevolume/*`, затем PV снова доступен | ⚠️ **Устарел**, только NFS/hostPath, не поддерживается в CSI — не используйте |
 
 ```yaml
 spec:
   persistentVolumeReclaimPolicy: Retain    # ← override the StorageClass default per-PV
 ```
 
-> 🔥 **Production rule:** for any PVC that holds business data, set `Retain` and write a documented runbook for cleanup. `Delete` is convenient until the day you delete a namespace and lose 200 GB of customer uploads.
+> 🔥 **Продакшн-правило:** для любого PVC, содержащего бизнес-данные, задавайте `Retain` и пишите задокументированный runbook по очистке. `Delete` удобен до того дня, когда вы удалите пространство имён и потеряете 200 GB пользовательских загрузок.
 
 ---
 
-## 📍 Slide 16 – 🔄 Hot Reload — Three Strategies
+## 📍 Слайд 16 – 🔄 Горячая перезагрузка — три стратегии
 
-ConfigMap updates **don't restart pods**. Pods keep their startup snapshot of env vars; volume-mounted files do update (eventually) but most apps don't `inotify`-watch their config. Three workable patterns:
+Обновления ConfigMap **не перезапускают pod'ы**. Pod'ы сохраняют стартовый снимок переменных окружения; смонтированные файлы обновляются (в конечном счёте), но большинство приложений не следят за конфигом через `inotify`. Три рабочих паттерна:
 
-**1. Pod restart on config change (the GitOps way) — checksum annotation:**
+**1. Перезапуск pod'а при изменении конфига (путь GitOps) — аннотация с контрольной суммой:**
 ```yaml
 spec:
   template:
@@ -341,22 +341,22 @@ spec:
       annotations:
         checksum/config: {{ include "myapp.configmapHash" . }}
 ```
-Helm computes the hash; any change to the CM changes the annotation → Deployment rollout → fresh pods. Clean, declarative, GitOps-native.
+Helm вычисляет хеш; любое изменение CM меняет аннотацию → раскатка Deployment → свежие pod'ы. Чисто, декларативно, нативно для GitOps.
 
-**2. Reloader controller** — `stakater/Reloader` watches ConfigMaps and Secrets, then patches owning Deployments/StatefulSets to trigger a rollout. Zero app code changes. Set an annotation: `reloader.stakater.com/auto: "true"`.
+**2. Контроллер Reloader** — `stakater/Reloader` следит за ConfigMap'ами и Secret'ами, затем патчит владеющие Deployment/StatefulSet, чтобы вызвать раскатку. Ноль изменений кода приложения. Задайте аннотацию: `reloader.stakater.com/auto: "true"`.
 
-**3. App-level in-place reload:**
-* Mount ConfigMap as a volume (not env var, not subPath).
-* App watches the file with `fsnotify` (Go), `inotify` (Linux), or a 30s polling loop.
-* On change → re-read, swap config atomically, log it. NGINX, Envoy, Prometheus, Loki all do this natively.
+**3. Перезагрузка на месте на уровне приложения:**
+* Смонтируйте ConfigMap как том (не переменную окружения, не subPath).
+* Приложение следит за файлом через `fsnotify` (Go), `inotify` (Linux) или цикл опроса каждые 30s.
+* При изменении → перечитать, атомарно подменить конфиг, залогировать. NGINX, Envoy, Prometheus, Loki — все делают это нативно.
 
-> ⚠️ **`subPath` mounts never auto-update.** This is the #1 "my hot reload isn't working" cause.
+> ⚠️ **Монтирования `subPath` никогда не обновляются автоматически.** Это причина №1 "моя горячая перезагрузка не работает".
 
 ---
 
-## 📍 Slide 17 – 📸 VolumeSnapshots (GA in 1.20)
+## 📍 Слайд 17 – 📸 VolumeSnapshot'ы (GA в 1.20)
 
-Backups inside Kubernetes — CSI-driver-backed.
+Резервные копии внутри Kubernetes — на основе CSI-драйверов.
 
 ```yaml
 # 1. Take a snapshot of a PVC
@@ -381,29 +381,29 @@ spec:
     apiGroup: snapshot.storage.k8s.io
 ```
 
-* 📸 **`VolumeSnapshot`** (namespaced) + **`VolumeSnapshotContent`** (cluster) mirror the PVC/PV duality.
-* 🧰 Needs a CSI driver with snapshot support: AWS EBS CSI ✅, GCE PD CSI ✅, local-path-provisioner ❌.
-* 🆕 **K8s 1.36** (Apr 2026) promoted **VolumeGroupSnapshot to GA** — atomic multi-PVC snapshots for apps that span volumes (e.g., DB + WAL).
+* 📸 **`VolumeSnapshot`** (уровень пространства имён) + **`VolumeSnapshotContent`** (уровень кластера) повторяют двойственность PVC/PV.
+* 🧰 Нужен CSI-драйвер с поддержкой снимков: AWS EBS CSI ✅, GCE PD CSI ✅, local-path-provisioner ❌.
+* 🆕 **K8s 1.36** (апрель 2026) повысил **VolumeGroupSnapshot до GA** — атомарные снимки нескольких PVC для приложений, охватывающих несколько томов (например, БД + WAL).
 
 ---
 
-## 📍 Slide 18 – ☁️ CSI Drivers in 2026
+## 📍 Слайд 18 – ☁️ CSI-драйверы в 2026
 
-| Driver | Backend | Access | Snapshot | Expand | Notes |
+| Драйвер | Бэкенд | Доступ | Снимок | Расширение | Примечания |
 |---|---|---|---|---|---|
-| `ebs.csi.aws.com` | AWS EBS | RWO, RWOP | ✅ | ✅ | gp3 default in new clusters |
-| `efs.csi.aws.com` | AWS EFS | RWX | ❌ | n/a | NFSv4, pay per GB+IOPS |
-| `pd.csi.storage.gke.io` | GCE PD | RWO, RWOP | ✅ | ✅ | regional PD = ROX/RWX flavors |
-| `disk.csi.azure.com` | Azure Disk | RWO, RWOP | ✅ | ✅ | similar to EBS |
-| `file.csi.azure.com` | Azure Files | RWX | ✅ | ✅ | SMB or NFS protocol |
-| `rancher.io/local-path` | host disk | RWO | ❌ | ❌ | the default in `kind`/k3d/Rancher |
+| `ebs.csi.aws.com` | AWS EBS | RWO, RWOP | ✅ | ✅ | gp3 по умолчанию в новых кластерах |
+| `efs.csi.aws.com` | AWS EFS | RWX | ❌ | n/a | NFSv4, оплата за GB+IOPS |
+| `pd.csi.storage.gke.io` | GCE PD | RWO, RWOP | ✅ | ✅ | региональный PD = варианты ROX/RWX |
+| `disk.csi.azure.com` | Azure Disk | RWO, RWOP | ✅ | ✅ | аналог EBS |
+| `file.csi.azure.com` | Azure Files | RWX | ✅ | ✅ | протокол SMB или NFS |
+| `rancher.io/local-path` | локальный диск | RWO | ❌ | ❌ | по умолчанию в `kind`/k3d/Rancher |
 
-* 🔌 **CSI (Container Storage Interface)** went GA in K8s 1.13. Every modern storage driver is CSI. In-tree drivers (`kubernetes.io/aws-ebs`, etc.) are all migrated or deprecated.
-* 🧪 **For Lab 12**, you'll use `local-path-provisioner` (k3d's default StorageClass). It's RWO-only, no snapshots — fine for the visits counter; not what you'd run in prod.
+* 🔌 **CSI (Container Storage Interface)** достиг GA в K8s 1.13. Каждый современный драйвер хранилища — CSI. Встроенные драйверы (`kubernetes.io/aws-ebs` и т. д.) все мигрированы или устарели.
+* 🧪 **Для лабораторной 12** вы будете использовать `local-path-provisioner` (StorageClass k3d по умолчанию). Он только RWO, без снимков — подходит для счётчика посещений; не то, что вы бы запускали в продакшне.
 
 ---
 
-## 📍 Slide 19 – 📜 PVC State Machine
+## 📍 Слайд 19 – 📜 Конечный автомат PVC
 
 ```mermaid
 stateDiagram-v2
@@ -415,78 +415,78 @@ stateDiagram-v2
   Released --> [*]: reclaimPolicy=Delete
 ```
 
-States to recognize in `kubectl get pvc`:
-* ⏳ **Pending** — no matching PV yet. With `WaitForFirstConsumer`, normal until a Pod consumes it.
-* ✅ **Bound** — happy path.
-* 🔓 **Released** — PVC gone, PV (and data) still around — for `Retain` policies.
-* ❌ **Failed** — provisioner returned an error. `kubectl describe pvc <name>` → check Events.
+Состояния, которые нужно распознавать в `kubectl get pvc`:
+* ⏳ **Pending** — подходящего PV пока нет. С `WaitForFirstConsumer` это нормально, пока Pod не потребит его.
+* ✅ **Bound** — счастливый путь.
+* 🔓 **Released** — PVC исчез, PV (и данные) всё ещё здесь — для политик `Retain`.
+* ❌ **Failed** — провижионер вернул ошибку. `kubectl describe pvc <name>` → проверьте Events.
 
-> 🐛 **The classic stuck PVC:** `Pending` forever because no `StorageClass` is the cluster default and the PVC didn't specify `storageClassName`. Fix: `kubectl patch storageclass <name> -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'`.
+> 🐛 **Классический застрявший PVC:** `Pending` навсегда, потому что ни один `StorageClass` не является дефолтным для кластера, а PVC не указал `storageClassName`. Исправление: `kubectl patch storageclass <name> -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'`.
 
 ---
 
-## 📍 Slide 20 – 🧱 Stateful vs Stateless (Foreshadowing Lec 15)
+## 📍 Слайд 20 – 🧱 Stateful vs Stateless (предзнаменование лекции 15)
 
-| Property | Stateless | Stateful |
+| Свойство | Stateless | Stateful |
 |---|---|---|
-| K8s workload | `Deployment` | `StatefulSet` (Lecture 15) |
-| Pod identity | Interchangeable, `app-7d-xyz` | Sticky: `db-0`, `db-1`, `db-2` |
-| Storage | `emptyDir` or none | One PVC per pod, auto-provisioned by `volumeClaimTemplates` |
-| Scale | `kubectl scale --replicas=10` instantly | Ordered: 0 → 1 → 2 → … with health-check gating |
-| Examples | Web frontend, API, worker | Postgres, Kafka, Elasticsearch, Redis cluster |
+| Нагрузка K8s | `Deployment` | `StatefulSet` (лекция 15) |
+| Идентичность pod'а | Взаимозаменяемая, `app-7d-xyz` | Липкая: `db-0`, `db-1`, `db-2` |
+| Хранилище | `emptyDir` или ничего | Один PVC на pod, автоматически провижионится через `volumeClaimTemplates` |
+| Масштабирование | `kubectl scale --replicas=10` мгновенно | Упорядоченно: 0 → 1 → 2 → … с гейтингом по проверке состояния |
+| Примеры | Веб-фронтенд, API, worker | Postgres, Kafka, Elasticsearch, кластер Redis |
 
-* 🍱 **Today's lab uses a Deployment + PVC** — fine for one replica writing to one volume.
-* 🪜 **Lecture 15 introduces StatefulSet** — when you need three Postgres replicas, each with its own PVC, surviving rescheduling with stable network IDs.
+* 🍱 **Сегодняшняя лабораторная использует Deployment + PVC** — подходит для одной реплики, пишущей в один том.
+* 🪜 **Лекция 15 вводит StatefulSet** — когда вам нужны три реплики Postgres, каждая со своим PVC, переживающие переназначение со стабильными сетевыми ID.
 
-> 💡 **Pets vs cattle** (Bill Baker, 2012): Deployments are cattle, StatefulSets are pets. Both are valid; pick by data model.
-
----
-
-## 📍 Slide 21 – 🚫 Anti-Patterns
-
-1. ❌ **Secrets in ConfigMaps** — git-tracked + plain etcd + broad RBAC. Use a `Secret` or External Secrets Operator.
-2. ❌ **`hostPath` volumes in production** — ties the pod to a node, breaks rescheduling, exfiltration risk. Demo-only.
-3. ❌ **`emptyDir` for data you care about** — wiped when the pod dies. Use a PVC.
-4. ❌ **`Delete` reclaim on prod data** — one `kubectl delete pvc` and the AWS volume is gone. Set `Retain` for anything precious.
-5. ❌ **`subPath` mount + expecting hot reload** — never happens. Use directory mount.
-6. ❌ **RWX cloud block volumes** — they don't exist. EBS/PD/Azure Disk are RWO. You need EFS/Files/NFS.
-7. ❌ **ConfigMap > 1 MiB** — etcd refuses. Split it, or move bulk data to a real config server.
-8. ❌ **Mutable ConfigMaps in hot paths** — every Pod watches; at 10k Pods it's a control-plane drag. Use `immutable: true` + versioned names.
-9. ❌ **No `volumeBindingMode: WaitForFirstConsumer`** in multi-AZ clusters — guaranteed zone mismatch.
-10. ❌ **Trusting "Bound"** — that means a PV exists, not that the data is what you wrote. Backups (VolumeSnapshot) live on a different axis.
+> 💡 **Питомцы vs скот** (Bill Baker, 2012): Deployment'ы — это скот, StatefulSet'ы — питомцы. Оба валидны; выбирайте по модели данных.
 
 ---
 
-## 📍 Slide 22 – 🎯 Key Takeaways
+## 📍 Слайд 21 – 🚫 Антипаттерны
 
-1. 📋 **ConfigMap = non-sensitive runtime config**, namespaced, 1 MiB cap, plain in etcd. Three injection patterns: single env, `envFrom`, volume mount.
-2. 🔒 **`immutable: true`** (stable since 1.21) is the perf + safety move for high-Pod-count clusters; pairs with versioned names.
-3. 💾 **PVC (namespaced, the request) ↔ PV (cluster-scoped, the resource) ↔ StorageClass (the template).** Dynamic provisioning is the default since 1.6.
-4. 🔓 **AccessModes:** RWO (one node), ROX (many RO), RWX (many RW, file-only), RWOP (one Pod, since K8s 1.29 GA). Cloud block storage is RWO/RWOP only.
-5. ♻️ **Reclaim policy:** `Retain` for data you'd cry over; `Delete` for caches; never `Recycle`.
-6. 🔄 **Hot reload:** checksum annotation OR Reloader OR app-level fsnotify on a directory mount. `subPath` blocks updates.
-7. 📸 **VolumeSnapshot GA since 1.20**; group-snapshot GA in 1.36 for multi-volume apps.
-8. 🧱 **Deployment + PVC** is fine for one replica. Three Postgres replicas need a **StatefulSet** (Lecture 15).
-
-> 💬 *"The artifact is the same across environments; configuration is injected at runtime."* — the 12-Factor App, still right after 15 years.
+1. ❌ **Секреты в ConfigMap'ах** — отслеживаются git + открытый etcd + широкий RBAC. Используйте `Secret` или External Secrets Operator.
+2. ❌ **Тома `hostPath` в продакшне** — привязывают pod к узлу, ломают переназначение, риск эксфильтрации. Только для демо.
+3. ❌ **`emptyDir` для данных, которые вам важны** — стирается при смерти pod'а. Используйте PVC.
+4. ❌ **`Delete`-возврат на продакшн-данных** — один `kubectl delete pvc` и AWS-том исчез. Задавайте `Retain` для всего ценного.
+5. ❌ **Монтирование `subPath` + ожидание горячей перезагрузки** — никогда не происходит. Используйте монтирование каталога.
+6. ❌ **RWX облачные блочные тома** — их не существует. EBS/PD/Azure Disk — это RWO. Вам нужны EFS/Files/NFS.
+7. ❌ **ConfigMap > 1 MiB** — etcd отказывает. Разделите его или перенесите массовые данные в настоящий конфиг-сервер.
+8. ❌ **Изменяемые ConfigMap'ы на горячих путях** — каждый Pod следит; при 10k Pod'ов это тормоз для control plane. Используйте `immutable: true` + версионированные имена.
+9. ❌ **Отсутствие `volumeBindingMode: WaitForFirstConsumer`** в мульти-AZ кластерах — гарантированное несовпадение зон.
+10. ❌ **Доверие "Bound"** — это значит, что PV существует, а не что данные — это то, что вы записали. Резервные копии (VolumeSnapshot) живут на другой оси.
 
 ---
 
-## 📍 Slide 23 – 🚀 What Comes Next
+## 📍 Слайд 22 – 🎯 Ключевые выводы
 
-**📚 Next lecture: *Lecture 13 — GitOps with ArgoCD*** — because every ConfigMap, every PVC, every value file we wrote today belongs in git, and **ArgoCD** is what watches git and reconciles the cluster.
+1. 📋 **ConfigMap = нечувствительная конфигурация времени выполнения**, уровень пространства имён, лимит 1 MiB, открытый текст в etcd. Три паттерна внедрения: одна переменная окружения, `envFrom`, монтирование тома.
+2. 🔒 **`immutable: true`** (стабильно с 1.21) — это ход для производительности + безопасности в кластерах с большим числом Pod'ов; сочетается с версионированными именами.
+3. 💾 **PVC (уровень пространства имён, заявка) ↔ PV (уровень кластера, ресурс) ↔ StorageClass (шаблон).** Динамический провижининг — по умолчанию с 1.6.
+4. 🔓 **AccessModes:** RWO (один узел), ROX (много RO), RWX (много RW, только файловые), RWOP (один Pod, с K8s 1.29 GA). Облачное блочное хранилище — только RWO/RWOP.
+5. ♻️ **Политика возврата:** `Retain` для данных, о которых вы бы плакали; `Delete` для кешей; никогда `Recycle`.
+6. 🔄 **Горячая перезагрузка:** аннотация с контрольной суммой ИЛИ Reloader ИЛИ fsnotify на уровне приложения при монтировании каталога. `subPath` блокирует обновления.
+7. 📸 **VolumeSnapshot GA с 1.20**; групповой снимок GA в 1.36 для приложений с несколькими томами.
+8. 🧱 **Deployment + PVC** подходит для одной реплики. Три реплики Postgres нуждаются в **StatefulSet** (лекция 15).
 
-* 🔄 The **pull model**: cluster pulls desired state from git, not CI pushing into the cluster
+> 💬 *"Артефакт одинаков во всех средах; конфигурация внедряется во время выполнения."* — The 12-Factor App, по-прежнему верно спустя 15 лет.
+
+---
+
+## 📍 Слайд 23 – 🚀 Что дальше
+
+**📚 Следующая лекция: *Лекция 13 — GitOps с ArgoCD*** — потому что каждый ConfigMap, каждый PVC, каждый файл values, который мы написали сегодня, принадлежит git, а **ArgoCD** — это то, что следит за git и согласовывает кластер.
+
+* 🔄 **Pull-модель**: кластер вытягивает желаемое состояние из git, а не CI проталкивает в кластер
 * 🤖 **ArgoCD 3.4** — App-of-Apps, sync waves, ApplicationSets
-* 🎯 Drift detection: "the cluster diverged from git → fix it (or alert me)"
-* ↩️ Rollback = `git revert`
+* 🎯 Обнаружение дрейфа: "кластер отклонился от git → исправь это (или предупреди меня)"
+* ↩️ Откат = `git revert`
 
-**🔬 Lab 12 deliverables (10 + 2.5 bonus):**
-* Visits counter persisted to `/data/visits` (file-based, survives restart)
-* ConfigMap mounted as `config.json` file + a second ConfigMap injected via `envFrom`
-* PVC for `/data`, verified by `kubectl delete pod` → counter survives
-* `k8s/CONFIGMAPS.md` with command outputs + screenshots
-* Bonus: hot-reload via checksum annotation, Reloader, or fsnotify; document `subPath` limitation
+**🔬 Результаты лабораторной 12 (10 + 2.5 бонусных):**
+* Счётчик посещений, сохраняемый в `/data/visits` (на основе файла, переживает перезапуск)
+* ConfigMap, смонтированный как файл `config.json` + второй ConfigMap, внедряемый через `envFrom`
+* PVC для `/data`, проверенный через `kubectl delete pod` → счётчик переживает
+* `k8s/CONFIGMAPS.md` с выводами команд + скриншотами
+* Бонус: горячая перезагрузка через аннотацию с контрольной суммой, Reloader или fsnotify; задокументировать ограничение `subPath`
 
 ```mermaid
 flowchart LR
@@ -495,20 +495,20 @@ flowchart LR
   Lab13 --> Lab15[🧱 Lab 15<br/>StatefulSets]
 ```
 
-> 🌊 From hardcoded values to dynamic, persistent, GitOps-managed config — one volume at a time.
+> 🌊 От захардкоженных значений к динамическому, постоянному, управляемому через GitOps конфигу — по одному тому за раз.
 
 ---
 
-## 📚 Resources
+## 📚 Ресурсы
 
-* 📕 *Kubernetes Up & Running* (3e, 2022) — Burns, Beda, Hightower — ConfigMap + Volume chapters
-* 📕 *Kubernetes Patterns* (2e, 2023) — Bilgin Ibryam & Roland Huß — pattern catalog
+* 📕 *Kubernetes Up & Running* (3e, 2022) — Burns, Beda, Hightower — главы о ConfigMap + Volume
+* 📕 *Kubernetes Patterns* (2e, 2023) — Bilgin Ibryam & Roland Huß — каталог паттернов
 * 🌐 [kubernetes.io/docs/concepts/configuration/configmap](https://kubernetes.io/docs/concepts/configuration/configmap/)
 * 🌐 [kubernetes.io/docs/concepts/storage/persistent-volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)
 * 🌐 [kubernetes.io/docs/concepts/storage/volume-snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/)
-* 🌐 [12factor.net/config](https://12factor.net/config) — Factor III
-* 🌐 [github.com/stakater/Reloader](https://github.com/stakater/Reloader) — auto-restart on CM/Secret change
+* 🌐 [12factor.net/config](https://12factor.net/config) — фактор III
+* 🌐 [github.com/stakater/Reloader](https://github.com/stakater/Reloader) — авто-перезапуск при изменении CM/Secret
 * 🌐 [github.com/kubernetes-sigs/aws-ebs-csi-driver](https://github.com/kubernetes-sigs/aws-ebs-csi-driver)
-* 🌐 [github.com/rancher/local-path-provisioner](https://github.com/rancher/local-path-provisioner) — default in `kind`/k3d
+* 🌐 [github.com/rancher/local-path-provisioner](https://github.com/rancher/local-path-provisioner) — по умолчанию в `kind`/k3d
 
-**🎓 Quiz:** post-lecture quiz feeds the weeks 10-12 leaderboard window.
+**🎓 Квиз:** квиз после лекции идёт в зачёт окна лидерборда недель 10-12.

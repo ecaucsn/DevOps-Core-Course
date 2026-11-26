@@ -1,99 +1,99 @@
-# Lab 18 — Reproducible Builds with Nix
+# Лабораторная 18 — Воспроизводимые сборки с Nix
 
 ![difficulty](https://img.shields.io/badge/difficulty-intermediate-yellow)
 ![topic](https://img.shields.io/badge/topic-Nix%20%26%20Reproducibility-blue)
 ![points](https://img.shields.io/badge/points-10%2B2-orange)
 ![type](https://img.shields.io/badge/type-Exam%20Alternative-purple)
 
-> **Goal:** Build your Lab 1 service and a container image with Nix flakes, then prove two independent builds land on the **identical `/nix/store` path** — the bit-for-bit reproducibility that a `Dockerfile` cannot deliver.
-> **Deliverable:** A PR from `lab18` adding `labs/lab18/` (your flake + sources) and `labs/submission18.md`. The PR description must include the store path you reproduced.
+> **Цель:** Собрать ваш сервис из лабораторной 1 и образ контейнера с помощью Nix flakes, затем доказать, что две независимые сборки попадают в **идентичный путь `/nix/store`** — побитовую воспроизводимость, которую `Dockerfile` дать не может.
+> **Результат сдачи:** PR из `lab18`, добавляющий `labs/lab18/` (ваш flake + исходники) и `labs/submission18.md`. Описание PR должно содержать путь в store, который вы воспроизвели.
 
 ---
 
-## Overview
+## Обзор
 
-A `Dockerfile` and a `requirements.txt` *look* reproducible. They drift:
+`Dockerfile` и `requirements.txt` *выглядят* воспроизводимыми. Они дрейфуют:
 
-- `FROM python:3.13-slim` points to different content over time — the tag is mutable
-- `pip install -r requirements.txt` lets transitive deps move even with `==` pins on direct ones
-- Docker layers embed build timestamps, so the same `Dockerfile` produces a different image SHA every build
+- `FROM python:3.13-slim` со временем указывает на разное содержимое — тег изменяем
+- `pip install -r requirements.txt` позволяет транзитивным зависимостям двигаться даже при `==`-пинах на прямых
+- Слои Docker встраивают таймстампы сборки, поэтому один и тот же `Dockerfile` даёт разный SHA образа при каждой сборке
 
-Nix fixes this by treating the build as a **pure function of its inputs**. Every input — sources, dependencies, compiler, build flags — is hashed into the output path `/nix/store/<sha256>-<name>-<version>`. Same inputs → same hash → identical output, on any machine, today and in 2036. The same hash also means a cache hit on `cache.nixos.org` skips the rebuild entirely.
+Nix исправляет это, трактуя сборку как **чистую функцию от её входов**. Каждый вход — исходники, зависимости, компилятор, флаги сборки — хешируется в путь вывода `/nix/store/<sha256>-<name>-<version>`. Те же входы → тот же хеш → идентичный вывод, на любой машине, сегодня и в 2036. Тот же хеш также означает попадание в кэш на `cache.nixos.org`, что полностью пропускает пересборку.
 
-In this lab you will practice:
+В этой лабораторной вы отработаете:
 
-- Writing a **flake** by hand — outer shape, inputs, outputs — choosing the right derivation builder for what you're packaging
-- Pinning the full dependency closure with `flake.lock` (the anchor of reproducibility)
-- Building a container image with `dockerTools` — no `FROM`, no `apt-get`, no layer timestamps
-- **Proving** two independent builds produce the **identical store path** — the bit-for-bit headline
+- Написание **flake** вручную — внешняя форма, входы, выходы — выбор правильного построителя derivation для того, что вы упаковываете
+- Фиксацию полного замыкания зависимостей с помощью `flake.lock` (якорь воспроизводимости)
+- Сборку образа контейнера с `dockerTools` — без `FROM`, без `apt-get`, без таймстампов слоёв
+- **Доказательство** того, что две независимые сборки дают **идентичный путь в store** — побитовый заголовок
 
-> ⚠️ **Scope:** No Kubernetes, no CI. One service, one flake, two `nix build` runs, one hash comparison. Reproducibility is the whole point — don't get clever.
+> ⚠️ **Область:** без Kubernetes, без CI. Один сервис, один flake, два запуска `nix build`, одно сравнение хешей. Воспроизводимость — это весь смысл — не усложняйте.
 
-**This is an Exam Alternative Lab.** Complete both Lab 17 (Cloudflare Workers) and Lab 18 (Nix) to the required bar to replace the final exam. See Lab 17 for the exam-alternative deadline and minimum-score rules. Taken on its own, Lab 18 is a **bonus** lab: **10 pts** of main tasks (6 + 4) + a **2 pt** bonus = **12 pts max**.
+**Это экзаменационная альтернативная лабораторная.** Выполните обе — лабораторную 17 (Cloudflare Workers) и лабораторную 18 (Nix) — на требуемом уровне, чтобы заменить финальный экзамен. Дедлайн экзаменационной альтернативы и правила минимального балла см. в лабораторной 17. Сама по себе лабораторная 18 — **бонусная**: **10 баллов** за основные задачи (6 + 4) + **2 балла** за бонус = **максимум 12 баллов**.
 
-**Tech stack (May 2026):** Nix **2.25+** (flakes stable since 2.18; Determinate / official installer) · `nixos/nix` container as the WSL-friendly path · nixpkgs `nixos-25.11` (release branch, pinned via flake input) · `dockerTools.buildLayeredImage` · Docker (to `docker load` the resulting image)
+**Технологический стек (май 2026):** Nix **2.25+** (flakes стабильны с 2.18; Determinate / официальный установщик) · контейнер `nixos/nix` как путь, дружественный к WSL · nixpkgs `nixos-25.11` (release-ветка, зафиксированная через вход flake) · `dockerTools.buildLayeredImage` · Docker (чтобы `docker load` полученный образ)
 
-> **Lix:** a community fork of Nix (forked March 2024) is a drop-in `nix` replacement with faster evaluation and friendlier governance. Either Nix 2.25+ or current Lix works for this lab.
+> **Lix:** форк Nix от сообщества (ответвлён в марте 2024) — это drop-in замена `nix` с более быстрой оценкой и более дружелюбным управлением. Для этой лабораторной подойдёт либо Nix 2.25+, либо актуальный Lix.
 
-> **Note on outputs:** every command output, hash, and store path shown below is **illustrative** — yours will differ. What must be reproducible is that **your own** two builds produce the **identical** path.
-
----
-
-## Project State
-
-**You should have from previous labs:**
-
-- `app_python/` — the Flask / FastAPI service from Lab 1 with `GET /` and `GET /health`
-- `app_python/Dockerfile` from Lab 2 (you'll contrast it against `dockerTools` in Task 2)
-
-> If you no longer have Lab 1/2 artifacts, a one-route Flask app (`app.py` with `/health`) plus a one-line `requirements.txt` is enough to complete every task. The skill being graded is *the flake*, not the app.
-
-**This lab adds:**
-
-- `labs/lab18/flake.nix` — your flake (Task 1)
-- `labs/lab18/flake.lock` — the lock file pinning the full closure (Task 1, committed)
-- `labs/lab18/app/` — sources for your derivation
-- `labs/submission18.md` — your submission report
+> **Замечание о выводах:** каждый вывод команды, хеш и путь в store, показанные ниже, — **иллюстративные** — ваши будут отличаться. Воспроизводимым должно быть то, что **ваши собственные** две сборки дают **идентичный** путь.
 
 ---
 
-## Setup
+## Состояние проекта
 
-Nix installs to `/nix` at the system root and needs `root` to do so. On WSL2 (and on locked-down hosts) the cleanest path is the **`nixos/nix` Docker image** — it ships Nix with flakes pre-enabled and leaves your host filesystem untouched. The reference submission was built that way.
+**У вас должно быть из предыдущих лабораторных:**
 
-**Path A — `nixos/nix` container (recommended on WSL / locked-down hosts):**
+- `app_python/` — сервис Flask / FastAPI из лабораторной 1 с `GET /` и `GET /health`
+- `app_python/Dockerfile` из лабораторной 2 (вы сравните его с `dockerTools` в задаче 2)
+
+> Если у вас больше нет артефактов лабораторных 1/2, приложения Flask с одним маршрутом (`app.py` с `/health`) плюс `requirements.txt` в одну строку достаточно, чтобы выполнить каждую задачу. Оценивается навык — *flake*, а не приложение.
+
+**Эта лабораторная добавляет:**
+
+- `labs/lab18/flake.nix` — ваш flake (задача 1)
+- `labs/lab18/flake.lock` — lock-файл, фиксирующий полное замыкание (задача 1, коммитится)
+- `labs/lab18/app/` — исходники для вашего derivation
+- `labs/submission18.md` — ваш отчёт о сдаче
+
+---
+
+## Настройка
+
+Nix устанавливается в `/nix` в корне системы и для этого нужен `root`. На WSL2 (и на закрытых хостах) самый чистый путь — **Docker-образ `nixos/nix`** — он поставляется с Nix и предварительно включёнными flakes и не трогает файловую систему хоста. Эталонная сдача была построена именно так.
+
+**Путь A — контейнер `nixos/nix` (рекомендуется на WSL / закрытых хостах):**
 
 ```bash
-# Pinned image tag — do NOT use :latest (mutable). 2.34 or any 2.25+ is fine.
+# Фиксированный тег образа — НЕ используйте :latest (изменяемый). 2.34 или любой 2.25+ подойдёт.
 docker run --rm -it \
   -v "$PWD":/work -w /work \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --entrypoint /bin/sh \
   nixos/nix:2.34.0
 
-# inside the container — flakes need the experimental feature flag explicit
+# внутри контейнера — flakes требуют явного флага экспериментальной функции
 nix --version
 nix --extra-experimental-features 'nix-command flakes' eval --expr '1 + 1'
 ```
 
-The `docker.sock` mount lets `docker load < result` work from inside the Nix container in Task 2.
+Монтирование `docker.sock` позволяет `docker load < result` работать изнутри контейнера Nix в задаче 2.
 
-**Path B — host install (Linux / macOS with sudo):**
+**Путь B — установка на хост (Linux / macOS с sudo):**
 
 ```bash
-# Determinate Systems installer — flakes on by default, clean uninstall
+# Установщик Determinate Systems — flakes включены по умолчанию, чистое удаление
 curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install
-nix --version            # expect 2.25.x or newer
+nix --version            # ожидается 2.25.x или новее
 ```
 
 <details>
-<summary>🐧 Alternative: official Nix installer — use this if `install.determinate.systems` is unreachable or times out from your network (flakes must be enabled by hand)</summary>
+<summary>🐧 Альтернатива: официальный установщик Nix — используйте его, если `install.determinate.systems` недоступен или истекает по таймауту из вашей сети (flakes нужно включать вручную)</summary>
 
 ```bash
 sh <(curl -L https://nixos.org/nix/install) --daemon
 ```
 
-Then add to `~/.config/nix/nix.conf` and restart your terminal:
+Затем добавьте в `~/.config/nix/nix.conf` и перезапустите терминал:
 
 ```
 experimental-features = nix-command flakes
@@ -101,304 +101,304 @@ experimental-features = nix-command flakes
 
 </details>
 
-Sanity check (either path) — run a package without installing it:
+Проверка (любой путь) — запустите пакет, не устанавливая его:
 
 ```bash
-nix run nixpkgs#hello   # downloads + runs `hello`, installs nothing permanent
+nix run nixpkgs#hello   # скачивает + запускает `hello`, ничего постоянного не устанавливает
 ```
 
-Create the layout:
+Создайте структуру:
 
 ```
 labs/lab18/
-├── flake.nix          # YOU WRITE — Task 1
-├── flake.lock         # generated by `nix flake update`, committed
-├── app/               # your Lab 1 sources (or the minimal stub)
+├── flake.nix          # ПИШЕТЕ ВЫ — задача 1
+├── flake.lock         # генерируется `nix flake update`, коммитится
+├── app/               # ваши исходники из лабораторной 1 (или минимальная заглушка)
 │   ├── app.py
 │   └── requirements.txt
-└── (submission18.md lives one level up at labs/submission18.md)
+└── (submission18.md лежит на уровень выше в labs/submission18.md)
 ```
 
 ---
 
-## Task 1 — Write a flake that builds the Lab 1 app (6 pts)
+## Задача 1 — Написать flake, который собирает приложение из лабораторной 1 (6 баллов)
 
-**Objective:** Hand-write `flake.nix` from a structural skeleton, build the Lab 1 service through it, and commit `flake.lock` so the closure is pinned.
+**Цель:** Вручную написать `flake.nix` по структурному скелету, собрать сервис из лабораторной 1 через него и закоммитить `flake.lock`, чтобы замыкание было зафиксировано.
 
-### 1.1 — Outer shape of the flake
+### 1.1 — Внешняя форма flake
 
-A flake is a Nix expression with three top-level fields: `description`, `inputs`, `outputs`. **What's inside each is yours.** The skeleton below shows only the **shape** — the choices that make this *your* reproducible build are blank.
+Flake — это выражение Nix с тремя полями верхнего уровня: `description`, `inputs`, `outputs`. **Что внутри каждого — ваше дело.** Скелет ниже показывает только **форму** — выбор, который делает эту сборку *вашей* воспроизводимой, оставлен пустым.
 
 ```nix
 # labs/lab18/flake.nix
 {
-  description = ___;                       # YOUR TASK: one short string describing what this flake builds
+  description = ___;                       # ВАША ЗАДАЧА: одна короткая строка, описывающая, что собирает этот flake
 
   inputs = {
-    # YOUR TASK: pick a NIXPKGS REVISION AND PIN IT.
-    # The lab tests `nixos-25.11` (the Nov-2024 release branch). NOT `nixpkgs-unstable`
-    # — unstable means non-reproducible across days. Use a release tag.
-    # Format: github:NixOS/nixpkgs/<branch-or-rev>
+    # ВАША ЗАДАЧА: выберите РЕВИЗИЮ NIXPKGS И ЗАФИКСИРУЙТЕ ЕЁ.
+    # Лабораторная тестирует `nixos-25.11` (release-ветка от ноября 2024). НЕ `nixpkgs-unstable`
+    # — unstable означает невоспроизводимость по дням. Используйте release-тег.
+    # Формат: github:NixOS/nixpkgs/<branch-or-rev>
     nixpkgs.url = ___;
   };
 
   outputs = { self, nixpkgs }:
     let
-      # YOUR TASK: pick the system you're building for.
-      #   x86_64-linux  — WSL2 / most Linux laptops / CI
-      #   aarch64-linux — Linux on Apple Silicon under Docker / Asahi
-      #   aarch64-darwin — Apple Silicon macOS native
+      # ВАША ЗАДАЧА: выберите систему, под которую собираете.
+      #   x86_64-linux  — WSL2 / большинство Linux-ноутбуков / CI
+      #   aarch64-linux — Linux на Apple Silicon под Docker / Asahi
+      #   aarch64-darwin — Apple Silicon macOS нативно
       #   x86_64-darwin  — Intel macOS
       system = ___;
-      pkgs   = ___;                        # YOUR TASK: legacyPackages for the chosen system
+      pkgs   = ___;                        # ВАША ЗАДАЧА: legacyPackages для выбранной системы
     in {
-      packages.${system}.default = ___;    # YOUR TASK: a derivation that builds your app — see 1.2
-      # Task 2 will add a second output here: packages.${system}.dockerImg
+      packages.${system}.default = ___;    # ВАША ЗАДАЧА: derivation, который собирает ваше приложение — см. 1.2
+      # Задача 2 добавит здесь второй выход: packages.${system}.dockerImg
     };
 }
 ```
 
-**Why each line is a rubric line:**
+**Почему каждая строка — строка рубрики:**
 
-- **`description`** — one sentence; appears in `nix flake show` and `nix flake metadata`. Make it useful.
-- **`inputs.nixpkgs.url`** — *the* reproducibility anchor. A release tag (`nixos-25.11`) or a specific commit SHA freezes the entire dependency tree. **`nixpkgs-unstable` is wrong here** — its tip moves daily and is the most common "reproducible build that isn't" mistake.
-- **`system`** — flake outputs are per-system. Pick the one you'll demo on; classmates on other systems can add their own to your flake.
-- **`pkgs`** — `nixpkgs.legacyPackages.${system}` is the canonical handle for "the package set, evaluated for this system." Memorise it.
-- **`packages.${system}.default`** — what `nix build` (no `.#attr`) builds. This is your service.
+- **`description`** — одно предложение; появляется в `nix flake show` и `nix flake metadata`. Сделайте её полезной.
+- **`inputs.nixpkgs.url`** — *тот самый* якорь воспроизводимости. Release-тег (`nixos-25.11`) или конкретный SHA коммита замораживает всё дерево зависимостей. **`nixpkgs-unstable` здесь неправильный** — его верхушка движется ежедневно, и это самая частая ошибка «воспроизводимой сборки, которая таковой не является».
+- **`system`** — выходы flake посчитаны на систему. Выберите ту, на которой будете демонстрировать; однокурсники на других системах могут добавить свои в ваш flake.
+- **`pkgs`** — `nixpkgs.legacyPackages.${system}` — канонический дескриптор для «набора пакетов, вычисленного для этой системы». Запомните его.
+- **`packages.${system}.default`** — то, что собирает `nix build` (без `.#attr`). Это ваш сервис.
 
-### 1.2 — Pick a derivation and fill its body
+### 1.2 — Выберите derivation и заполните его тело
 
-The Nix store has dozens of builder functions (`mkDerivation`, `writeShellApplication`, `buildPythonApplication`, `buildGoModule`, …). Each one makes different assumptions about what it's packaging. Pick the one that matches your Lab 1 stack:
+В store Nix есть десятки функций-построителей (`mkDerivation`, `writeShellApplication`, `buildPythonApplication`, `buildGoModule`, …). Каждая делает разные допущения о том, что упаковывает. Выберите ту, что соответствует вашему стеку из лабораторной 1:
 
-| Builder | Best for | Key inputs |
+| Построитель | Лучше всего для | Ключевые входы |
 |---|---|---|
-| `pkgs.writeShellApplication` | A wrapper script that calls something else (the reference submission uses this) | `name`, `runtimeInputs`, `text` |
-| `pkgs.stdenv.mkDerivation` | Generic — you supply `buildPhase` / `installPhase` | `src`, `buildInputs`, `installPhase` |
-| `pkgs.python3Packages.buildPythonApplication` | A Python app with `pyproject.toml` / `setup.py` | `pname`, `version`, `src`, `propagatedBuildInputs`, `format` |
-| `pkgs.buildGoModule` | A Go program (Lab 1 bonus) | `pname`, `src`, `vendorHash` |
+| `pkgs.writeShellApplication` | Скрипт-обёртка, вызывающий что-то другое (эталонная сдача использует его) | `name`, `runtimeInputs`, `text` |
+| `pkgs.stdenv.mkDerivation` | Универсальный — вы задаёте `buildPhase` / `installPhase` | `src`, `buildInputs`, `installPhase` |
+| `pkgs.python3Packages.buildPythonApplication` | Python-приложение с `pyproject.toml` / `setup.py` | `pname`, `version`, `src`, `propagatedBuildInputs`, `format` |
+| `pkgs.buildGoModule` | Go-программа (бонус лабораторной 1) | `pname`, `src`, `vendorHash` |
 
-**`YOUR TASK`**: in the `default = ___` blank from 1.1, call the builder that fits your app. Examples of the **shape only** (the inside is still yours):
+**`ВАША ЗАДАЧА`**: в пустом `default = ___` из 1.1 вызовите построитель, подходящий вашему приложению. Примеры **только формы** (внутри по-прежнему ваше):
 
 ```nix
-# Shape 1 — writeShellApplication (good if your "app" is a thin shell entrypoint
-# that calls into python/curl/whatever from the pinned closure)
+# Форма 1 — writeShellApplication (хорошо, если ваше «приложение» — тонкая shell-точка входа,
+# которая вызывает python/curl/что угодно из зафиксированного замыкания)
 packages.${system}.default = pkgs.writeShellApplication {
-  name         = ___;                       # YOUR TASK: the binary name produced under result/bin/
-  runtimeInputs = with pkgs; [ ___ ];       # YOUR TASK: every command your text uses (python3, curl, …)
-  text         = ___;                       # YOUR TASK: the shell body. Single-quoted ''…'' multiline OK
+  name         = ___;                       # ВАША ЗАДАЧА: имя бинарника, создаваемого в result/bin/
+  runtimeInputs = with pkgs; [ ___ ];       # ВАША ЗАДАЧА: каждая команда, которую использует ваш text (python3, curl, …)
+  text         = ___;                       # ВАША ЗАДАЧА: тело shell. Многострочный текст в ''…'' OK
 };
 ```
 
 ```nix
-# Shape 2 — buildPythonApplication (if you have a real Python package)
+# Форма 2 — buildPythonApplication (если у вас настоящий Python-пакет)
 packages.${system}.default = pkgs.python3Packages.buildPythonApplication {
-  pname   = ___;                            # YOUR TASK
-  version = ___;                            # YOUR TASK
-  src     = ___;                            # YOUR TASK — usually ./app
-  format  = ___;                            # YOUR TASK — "other" if no pyproject/setup
-  propagatedBuildInputs = with pkgs.python3Packages; [ ___ ]; # YOUR TASK — flask, etc.
+  pname   = ___;                            # ВАША ЗАДАЧА
+  version = ___;                            # ВАША ЗАДАЧА
+  src     = ___;                            # ВАША ЗАДАЧА — обычно ./app
+  format  = ___;                            # ВАША ЗАДАЧА — "other", если нет pyproject/setup
+  propagatedBuildInputs = with pkgs.python3Packages; [ ___ ]; # ВАША ЗАДАЧА — flask и т.д.
   nativeBuildInputs     = [ pkgs.makeWrapper ];
-  installPhase = ___;                       # YOUR TASK — copy app.py → $out/bin, wrapProgram with PYTHONPATH
+  installPhase = ___;                       # ВАША ЗАДАЧА — скопировать app.py → $out/bin, wrapProgram с PYTHONPATH
 };
 ```
 
 ```nix
-# Shape 3 — buildGoModule (if you did the Lab 1 Go bonus)
+# Форма 3 — buildGoModule (если вы сделали Go-бонус лабораторной 1)
 packages.${system}.default = pkgs.buildGoModule {
-  pname      = ___;                         # YOUR TASK
-  version    = ___;                         # YOUR TASK
-  src        = ___;                         # YOUR TASK
-  vendorHash = ___;                         # YOUR TASK — null if no deps; else a sha256 from lib.fakeHash discovery
+  pname      = ___;                         # ВАША ЗАДАЧА
+  version    = ___;                         # ВАША ЗАДАЧА
+  src        = ___;                         # ВАША ЗАДАЧА
+  vendorHash = ___;                         # ВАША ЗАДАЧА — null, если нет зависимостей; иначе sha256 из поиска через lib.fakeHash
 };
 ```
 
-> **Why no PyPI?** A Nix build is **sandboxed with no network** by default. Nix pulls packages from the pinned nixpkgs revision (`Flask` → `pkgs.python3Packages.flask`). That's *the* reason the closure is reproducible: every dep is itself a fixed `/nix/store/...` path, not a `pip resolve` away.
+> **Почему не PyPI?** Сборка Nix по умолчанию **в песочнице без сети**. Nix берёт пакеты из зафиксированной ревизии nixpkgs (`Flask` → `pkgs.python3Packages.flask`). Это *и есть* причина, по которой замыкание воспроизводимо: каждая зависимость — сама по себе фиксированный путь `/nix/store/...`, а не результат `pip resolve`.
 
 <details>
-<summary>📚 Where to learn the derivation syntax</summary>
+<summary>📚 Где изучить синтаксис derivation</summary>
 
 - [nix.dev — Building and running Python apps](https://nix.dev/tutorials/nixos/building-and-running-python-apps)
 - [nixpkgs Python manual](https://nixos.org/manual/nixpkgs/stable/#python)
-- [`writeShellApplication`](https://nixos.org/manual/nixpkgs/stable/#trivial-builder-writeShellApplication) — the lightest builder, shellcheck-validated
+- [`writeShellApplication`](https://nixos.org/manual/nixpkgs/stable/#trivial-builder-writeShellApplication) — легчайший построитель, валидируемый shellcheck
 - [Nix Pills — Our first derivation](https://nixos.org/guides/nix-pills/our-first-derivation.html)
 
-Pick **one** builder and defend the choice in `submission18.md` — TA grading docks for builder choices that don't match what's actually being packaged.
+Выберите **один** построитель и обоснуйте выбор в `submission18.md` — преподаватель снижает балл за выбор построителя, не соответствующий тому, что на самом деле упаковывается.
 
 </details>
 
-### 1.3 — Generate `flake.lock` and commit it
+### 1.3 — Сгенерировать `flake.lock` и закоммитить его
 
-`flake.lock` records the exact git SHA of every flake input. Without it, `nixpkgs/nixos-25.11` resolves to *whatever the branch tip is today* — fine for a few weeks, drifting silently over months. The lock file is what makes "build in 2026" identical to "build in 2036".
+`flake.lock` записывает точный git SHA каждого входа flake. Без него `nixpkgs/nixos-25.11` разрешается в *то, что сегодня на верхушке ветки* — нормально на несколько недель, но незаметно дрейфует за месяцы. Именно lock-файл делает «сборку в 2026» идентичной «сборке в 2036».
 
 ```bash
 cd labs/lab18
-git add flake.nix app/                    # flakes only see git-tracked files — see Pitfalls
-nix flake update                           # writes flake.lock; pins each input to a specific rev
-git add flake.lock                         # MUST be committed
-nix build                                  # builds packages.${system}.default
-./result/bin/<your-name>                   # runs your app
+git add flake.nix app/                    # flakes видят только отслеживаемые git файлы — см. Подводные камни
+nix flake update                           # записывает flake.lock; фиксирует каждый вход на конкретную ревизию
+git add flake.lock                         # ДОЛЖЕН быть закоммичен
+nix build                                  # собирает packages.${system}.default
+./result/bin/<your-name>                   # запускает ваше приложение
 ```
 
-`YOUR TASK`: open `flake.lock` and **answer in `submission18.md`**:
+`ВАША ЗАДАЧА`: откройте `flake.lock` и **ответьте в `submission18.md`**:
 
-- What field pins the exact `nixpkgs` revision? (Hint: it's not `ref`. Look at `locked.rev` and `locked.narHash`.)
-- Why does committing `flake.lock` matter, given you already pinned `nixpkgs-24.11` in `flake.nix`?
+- Какое поле фиксирует точную ревизию `nixpkgs`? (Подсказка: это не `ref`. Посмотрите на `locked.rev` и `locked.narHash`.)
+- Почему коммит `flake.lock` важен, если вы уже зафиксировали `nixpkgs-24.11` в `flake.nix`?
 
-### 1.4 — Proof of work
+### 1.4 — Доказательство работы
 
-**Paste into `labs/submission18.md`:**
+**Вставьте в `labs/submission18.md`:**
 
-- Your `flake.nix` contents (it's short — paste the whole thing) with a one-line note per `___` you filled in
-- The first 20 lines of your `flake.lock` (specifically, the `nixpkgs` node showing `locked.rev` + `locked.narHash`)
-- The output of:
+- содержимое вашего `flake.nix` (он короткий — вставьте целиком) с однострочной заметкой на каждый `___`, который вы заполнили
+- первые 20 строк вашего `flake.lock` (в частности, узел `nixpkgs`, показывающий `locked.rev` + `locked.narHash`)
+- вывод:
 
   ```bash
   nix build .#default
-  readlink result                            # /nix/store/<hash>-<name>  ← capture this exact path
-  ./result/bin/<your-name>                   # proves the binary runs
+  readlink result                            # /nix/store/<hash>-<name>  ← зафиксируйте этот точный путь
+  ./result/bin/<your-name>                   # доказывает, что бинарник запускается
   ```
 
-- Your one-paragraph answer to 1.3's "what does the lock pin?" question
+- ваш ответ одним абзацем на вопрос из 1.3 «что фиксирует lock?»
 
 ---
 
-## Task 2 — Reproducible Docker image with `dockerTools` (4 pts)
+## Задача 2 — Воспроизводимый Docker-образ с `dockerTools` (4 балла)
 
-**Objective:** Build a container image **from your flake** using `dockerTools.buildLayeredImage`, then contrast it with your Lab 2 Dockerfile (whose hash changes every build).
+**Цель:** Собрать образ контейнера **из вашего flake** с помощью `dockerTools.buildLayeredImage`, затем сравнить его с вашим Dockerfile из лабораторной 2 (чей хеш меняется при каждой сборке).
 
-### 2.1 — Show your Lab 2 image is not reproducible
+### 2.1 — Покажите, что ваш образ из лабораторной 2 невоспроизводим
 
 ```bash
 docker build -t lab2-app:v1 ./app_python && docker save lab2-app:v1 | sha256sum
 docker build -t lab2-app:v2 ./app_python && docker save lab2-app:v2 | sha256sum
 ```
 
-`YOUR TASK`: capture both SHA256 sums and confirm they differ. They do — Docker writes build timestamps into the layers, and `python:3.13-slim` can move under you between the two builds. Paste both sums into `submission18.md`.
+`ВАША ЗАДАЧА`: зафиксируйте обе суммы SHA256 и подтвердите, что они различаются. Так и есть — Docker вписывает таймстампы сборки в слои, а `python:3.13-slim` может сдвинуться под вами между двумя сборками. Вставьте обе суммы в `submission18.md`.
 
-### 2.2 — Add a `dockerImg` output to your flake
+### 2.2 — Добавьте выход `dockerImg` в ваш flake
 
-Add a second package output to the flake from Task 1. The skeleton below shows the **shape** of `buildLayeredImage` — every body field is yours. There is **no fully-formed example** — by the time you see one whole, it's typing practice, not learning.
+Добавьте второй выход-пакет в flake из задачи 1. Скелет ниже показывает **форму** `buildLayeredImage` — каждое поле тела ваше. **Полностью готового примера нет** — к тому времени, как вы увидите целый, это уже набор текста, а не обучение.
 
 ```nix
-# Inside the same outputs = { … } block from Task 1, alongside packages.${system}.default
+# Внутри того же блока outputs = { … } из задачи 1, рядом с packages.${system}.default
 packages.${system}.dockerImg = pkgs.dockerTools.buildLayeredImage {
-  name = ___;          # YOUR TASK: the image name (becomes `docker images` REPOSITORY).
-                       # Not "latest" — that's a tag, not a name. Pick something self-explanatory.
+  name = ___;          # ВАША ЗАДАЧА: имя образа (становится REPOSITORY в `docker images`).
+                       # Не "latest" — это тег, а не имя. Выберите что-то самоочевидное.
 
-  tag  = ___;          # YOUR TASK: a SemVer / CalVer / git-SHA tag. NOT "latest" (slide 20 of Lec 2).
+  tag  = ___;          # ВАША ЗАДАЧА: тег SemVer / CalVer / git-SHA. НЕ "latest" (слайд 20 лекции 2).
 
-  contents = [ ___ ];  # YOUR TASK: what goes inside the image filesystem.
-                       # At minimum, your Task-1 package (referenced by `self.packages.${system}.default`
-                       # OR a local `let app = … in app` binding). Add pkgs.coreutils / pkgs.cacert
-                       # only if your binary needs `ls`/`cat` or HTTPS at runtime.
+  contents = [ ___ ];  # ВАША ЗАДАЧА: что попадает внутрь файловой системы образа.
+                       # Как минимум ваш пакет из задачи 1 (указанный через `self.packages.${system}.default`
+                       # ИЛИ локальную привязку `let app = … in app`). Добавьте pkgs.coreutils / pkgs.cacert
+                       # только если вашему бинарнику нужны `ls`/`cat` или HTTPS во время выполнения.
 
   config = {
-    Cmd          = [ ___ ];          # YOUR TASK: the command that runs at container start. Exec form.
-                                     # Point at the binary your Task-1 derivation produced —
-                                     # e.g. "${app}/bin/<name>". Shell form would re-introduce the PID-1 trap
-                                     # you learned to avoid in Lab 2.
-    ExposedPorts = { ___ = {}; };    # YOUR TASK: the port your service listens on (Lab 1 default: 5000/tcp;
-                                     # Lab 2's container overrode this via PORT=8080 env var, but a fresh Nix
-                                     # build with writeShellApplication honors Lab 1's PORT default).
-                                     # The key is a string like "5000/tcp". If you want 8080, also add
-                                     # `Env = [ "PORT=8080" ];` to this config block.
+    Cmd          = [ ___ ];          # ВАША ЗАДАЧА: команда, запускаемая при старте контейнера. Exec-форма.
+                                     # Укажите на бинарник, созданный вашим derivation из задачи 1 —
+                                     # например, "${app}/bin/<name>". Shell-форма вновь внесла бы ловушку PID-1,
+                                     # которую вы научились избегать в лабораторной 2.
+    ExposedPorts = { ___ = {}; };    # ВАША ЗАДАЧА: порт, который слушает ваш сервис (по умолчанию лабораторной 1: 5000/tcp;
+                                     # контейнер лабораторной 2 переопределял его через переменную окружения PORT=8080, но свежая
+                                     # сборка Nix с writeShellApplication соблюдает PORT по умолчанию из лабораторной 1).
+                                     # Ключ — строка вида "5000/tcp". Если хотите 8080, также добавьте
+                                     # `Env = [ "PORT=8080" ];` в этот блок config.
   };
 
-  # THE reproducibility trick. Nix gives you a knob most container builders don't:
-  # the embedded creation timestamp. Set it to a FIXED epoch instead of "now".
-  created = ___;       # YOUR TASK: a fixed RFC-3339 timestamp string. NOT "now" — that re-introduces
-                       # non-determinism (every build differs). NOT 1970-01-01T00:00:00Z either
-                       # (Docker tooling sometimes rejects the literal Unix epoch). The accepted convention
-                       # is `1970-01-01T00:00:01Z` — one second after the epoch.
+  # ТРЮК воспроизводимости. Nix даёт вам ручку, которой нет у большинства сборщиков контейнеров:
+  # встроенный таймстамп создания. Установите его на ФИКСИРОВАННУЮ эпоху вместо "now".
+  created = ___;       # ВАША ЗАДАЧА: строка фиксированного таймстампа RFC-3339. НЕ "now" — это вновь вносит
+                       # недетерминизм (каждая сборка отличается). И не 1970-01-01T00:00:00Z
+                       # (инструменты Docker иногда отвергают буквальную Unix-эпоху). Принятая конвенция —
+                       # `1970-01-01T00:00:01Z` — на одну секунду позже эпохи.
 };
 ```
 
-> **`buildLayeredImage`** produces an efficient, content-addressed layered tarball — no `FROM` base image, no `apt-get`, no `RUN`. The pinned `created` epoch is what removes the last source of non-determinism.
+> **`buildLayeredImage`** создаёт эффективный, контентно-адресуемый слоистый tarball — без базового образа `FROM`, без `apt-get`, без `RUN`. Зафиксированная эпоха `created` — это то, что убирает последний источник недетерминизма.
 
 <details>
-<summary>📚 Where to learn dockerTools</summary>
+<summary>📚 Где изучить dockerTools</summary>
 
 - [nix.dev — Building and running Docker images](https://nix.dev/tutorials/nixos/building-and-running-docker-images.html)
-- [nixpkgs `dockerTools` reference](https://nixos.org/manual/nixpkgs/stable/#sec-pkgs-dockerTools) — `buildImage` vs `buildLayeredImage` vs `streamLayeredImage`
-- [pkgs.cacert](https://search.nixos.org/packages?show=cacert) — if your app calls HTTPS
+- [nixpkgs `dockerTools` reference](https://nixos.org/manual/nixpkgs/stable/#sec-pkgs-dockerTools) — `buildImage` против `buildLayeredImage` против `streamLayeredImage`
+- [pkgs.cacert](https://search.nixos.org/packages?show=cacert) — если ваше приложение вызывает HTTPS
 
 </details>
 
-### 2.3 — Build, load, run
+### 2.3 — Собрать, загрузить, запустить
 
 ```bash
-nix build .#dockerImg                  # → result is an image tarball, not a symlink to a binary
-file result                            # confirms it's a gzip'd tar
+nix build .#dockerImg                  # → result это tarball образа, а не symlink на бинарник
+file result                            # подтверждает, что это gzip'd tar
 
-# From inside the Nix container, the docker.sock mount lets this work; on host, you have docker directly
-docker load < result                   # loads <your-name>:<your-tag>
-docker run -d -p 5001:5000 --name lab18 <your-name>:<your-tag>      # if you exposed 5000/tcp
-# or, if you set Env = [ "PORT=8080" ] AND ExposedPorts = { "8080/tcp" = {}; }:
+# Изнутри контейнера Nix монтирование docker.sock позволяет этому работать; на хосте у вас docker напрямую
+docker load < result                   # загружает <your-name>:<your-tag>
+docker run -d -p 5001:5000 --name lab18 <your-name>:<your-tag>      # если вы открыли 5000/tcp
+# или, если вы задали Env = [ "PORT=8080" ] И ExposedPorts = { "8080/tcp" = {}; }:
 # docker run -d -p 5001:8080 --name lab18 <your-name>:<your-tag>
-curl http://localhost:5001/health      # behaves like the Lab 2 container
+curl http://localhost:5001/health      # ведёт себя как контейнер из лабораторной 2
 ```
 
-### 2.4 — Compare against the Lab 2 image
+### 2.4 — Сравнить с образом из лабораторной 2
 
 ```bash
 docker images --format '{{.Repository}}\t{{.Tag}}\t{{.Size}}' | grep -E 'lab2-app|<your-name>'
 docker history <your-name>:<your-tag>
 ```
 
-`YOUR TASK`: read your own `docker history`. The Nix image typically:
+`ВАША ЗАДАЧА`: прочитайте свой `docker history`. Образ Nix обычно:
 
-- Has **layers whose hashes are content-addressed** (same content → same layer hash, across builds and machines)
-- Ships **only the closure** — no Debian base, no `apt` cache, often smaller than the slim-based image
-- Has a `CREATED` timestamp that's **the epoch you set**, not `now`
+- Имеет **слои, чьи хеши контентно-адресуемы** (то же содержимое → тот же хеш слоя, на разных сборках и машинах)
+- Поставляет **только замыкание** — без базового Debian, без кэша `apt`, часто меньше образа на основе slim
+- Имеет таймстамп `CREATED`, равный **установленной вами эпохе**, а не `now`
 
-In `submission18.md`, write a one-paragraph finding comparing your Lab 2 image to the `dockerTools` image: size, layer count, and the `CREATED` column.
+В `submission18.md` напишите вывод одним абзацем, сравнивая ваш образ из лабораторной 2 с образом `dockerTools`: размер, число слоёв и столбец `CREATED`.
 
-### 2.5 — Proof of work
+### 2.5 — Доказательство работы
 
-**Paste into `labs/submission18.md`:**
+**Вставьте в `labs/submission18.md`:**
 
-- The `dockerImg` block of your `flake.nix` (the contents + config you wrote)
-- The two **differing** `docker save | sha256sum` outputs from 2.1
-- The `docker load` log line showing the loaded image name + tag
-- A real `curl` against `/health` proving the loaded image runs
-- The `docker images` + `docker history` rows comparing Lab 2 vs your Nix image
-- A two-sentence analysis: *why* a plain `Dockerfile` can't reach bit-for-bit reproducibility (the epoch trick, the base-image drift, the `apt-get` non-determinism). Reference the lecture, slides 15 and 18.
-
----
-
-## Bonus Task — Prove the build is bit-for-bit reproducible (2 pts)
-
-**Objective:** Run **two** independent `nix build` invocations and show they land on the **identical `/nix/store` path**. This is the headline of the entire lab — a successful build by itself isn't proof; *two builds that match* is.
-
-The reference submission's proof is **two `nix build .#default` runs, the second with `--rebuild`, both producing the same store path** plus an explicit hash equality. Nix's `--rebuild` flag forces a real rebuild (not a cache hit) and then **verifies that the output of the new build matches the existing store path bit-for-bit** — if anything differed, Nix would report it loudly.
-
-`YOUR TASK`: design and execute the proof yourself. The lab does NOT give you the commands. You will need to:
-
-1. Build `packages.${system}.default` once, capture the resulting store path
-2. Force Nix to do a **real, full rebuild** (not a cache hit) and capture the path the rebuild lands on
-3. Show that both paths are **identical** — and that Nix itself validates this in step 2 ("identical store path both builds" / "checking outputs of …")
-4. Repeat the same proof for `packages.${system}.dockerImg` (the image tarball) — `sha256sum result` from two clean builds must match
-5. Explain in `submission18.md` *why* this works: the role of the input hash, why `flake.lock` is the precondition, why `--rebuild` is the right command (`nix-store --delete` alone is brittle)
-
-Hints (not commands):
-
-- The flag you want forces a rebuild and verifies output equality automatically. Search `nix build --help` for the option whose description mentions "rebuild ... and check that the result is the same."
-- `readlink result` gives you the path. `sha256sum result` gives you the tarball hash for the Docker image.
-- If your two paths differ, your build has a non-determinism. Common causes: a `created = "now"` you forgot to fix, a `mkDerivation` with an unpinned `fetch*` input, or a missing `flake.lock`.
-
-**Paste into `labs/submission18.md`:**
-
-- The two commands you ran (the order matters — you'll figure out the right ones from `nix build --help`)
-- The captured `readlink result` from both runs of `default` — same string
-- The captured `sha256sum result` from two clean rebuilds of `dockerImg` — same digest
-- Nix's own confirmation line (something like `checking outputs of '/nix/store/<drv>'... IDENTICAL store path both builds`)
-- A short paragraph answering: how does `flake.lock` prevent the "works on my machine" failure mode that `requirements.txt` (Lab 1) and a Helm image tag (Lab 10) cannot?
-
-> 🏆 **This is the whole point of the lab.** A flake that builds isn't enough. A flake that builds **the same store path twice** is what "reproducible" actually means.
+- блок `dockerImg` вашего `flake.nix` (содержимое + config, который вы написали)
+- два **различающихся** вывода `docker save | sha256sum` из 2.1
+- строку лога `docker load`, показывающую загруженное имя + тег образа
+- реальный `curl` против `/health`, доказывающий, что загруженный образ работает
+- строки `docker images` + `docker history`, сравнивающие лабораторную 2 с вашим образом Nix
+- анализ в два предложения: *почему* обычный `Dockerfile` не может достичь побитовой воспроизводимости (трюк с эпохой, дрейф базового образа, недетерминизм `apt-get`). Сошлитесь на лекцию, слайды 15 и 18.
 
 ---
 
-## How to Submit
+## Бонусная задача — Доказать, что сборка побитово воспроизводима (2 балла)
+
+**Цель:** Выполнить **два** независимых вызова `nix build` и показать, что они попадают в **идентичный путь `/nix/store`**. Это заголовок всей лабораторной — успешная сборка сама по себе не доказательство; *две совпадающие сборки* — вот оно.
+
+Доказательство эталонной сдачи — **два запуска `nix build .#default`, второй с `--rebuild`, оба дают один и тот же путь в store**, плюс явное равенство хешей. Флаг `--rebuild` в Nix заставляет выполнить реальную пересборку (а не попадание в кэш) и затем **проверяет, что вывод новой сборки побитово совпадает с существующим путём в store** — если что-то отличалось бы, Nix громко об этом сообщил бы.
+
+`ВАША ЗАДАЧА`: спроектируйте и выполните доказательство сами. Лабораторная НЕ даёт вам команды. Вам нужно:
+
+1. Собрать `packages.${system}.default` один раз, зафиксировать результирующий путь в store
+2. Заставить Nix выполнить **реальную, полную пересборку** (не попадание в кэш) и зафиксировать путь, в который попадает пересборка
+3. Показать, что оба пути **идентичны** — и что сам Nix подтверждает это на шаге 2 («identical store path both builds» / «checking outputs of …»)
+4. Повторить то же доказательство для `packages.${system}.dockerImg` (tarball образа) — `sha256sum result` из двух чистых сборок должен совпасть
+5. Объяснить в `submission18.md`, *почему* это работает: роль хеша входов, почему `flake.lock` — предварительное условие, почему `--rebuild` — правильная команда (один только `nix-store --delete` хрупок)
+
+Подсказки (не команды):
+
+- Нужный флаг заставляет пересобрать и автоматически проверяет равенство вывода. Поищите в `nix build --help` опцию, чьё описание упоминает «rebuild ... and check that the result is the same».
+- `readlink result` даёт вам путь. `sha256sum result` даёт вам хеш tarball для Docker-образа.
+- Если ваши два пути различаются, в вашей сборке есть недетерминизм. Частые причины: `created = "now"`, который вы забыли исправить, `mkDerivation` с незафиксированным входом `fetch*` или отсутствующий `flake.lock`.
+
+**Вставьте в `labs/submission18.md`:**
+
+- две команды, которые вы запускали (порядок важен — правильные вы выясните из `nix build --help`)
+- зафиксированный `readlink result` из обоих запусков `default` — одна и та же строка
+- зафиксированный `sha256sum result` из двух чистых пересборок `dockerImg` — один и тот же дайджест
+- собственную строку подтверждения Nix (что-то вроде `checking outputs of '/nix/store/<drv>'... IDENTICAL store path both builds`)
+- короткий абзац с ответом: как `flake.lock` предотвращает режим отказа «работает на моей машине», которого не могут `requirements.txt` (лабораторная 1) и тег образа Helm (лабораторная 10)?
+
+> 🏆 **В этом весь смысл лабораторной.** Flake, который собирается, недостаточно. Flake, который собирается **в тот же путь в store дважды**, — вот что на самом деле означает «воспроизводимый».
+
+---
+
+## Как сдавать
 
 ```bash
 git switch -c lab18
@@ -408,140 +408,140 @@ git commit -m "feat(lab18): Nix reproducible build with flake + dockerTools"
 git push -u origin lab18
 ```
 
-Open **two** PRs:
+Откройте **два** PR:
 
-- `your-fork:lab18` → `course-repo:master` *(reviewed)*
-- `your-fork:lab18` → `your-fork:master` *(merges into your own main when done)*
+- `your-fork:lab18` → `course-repo:master` *(с проверкой)*
+- `your-fork:lab18` → `your-fork:master` *(сливается в ваш собственный main по завершении)*
 
-PR checklist:
+Чек-лист PR:
 
 ```text
-- [ ] Task 1 — flake.nix written by hand, flake.lock committed, app builds
-- [ ] Task 2 — dockerImg output added; image loads and runs; comparison to Lab 2 Dockerfile documented
-- [ ] Bonus — two independent builds land on the identical store path; sha256sum equality proven for the image
+- [ ] Задача 1 — flake.nix написан вручную, flake.lock закоммичен, приложение собирается
+- [ ] Задача 2 — выход dockerImg добавлен; образ загружается и запускается; сравнение с Dockerfile лабораторной 2 задокументировано
+- [ ] Бонус — две независимые сборки попадают в идентичный путь в store; равенство sha256sum доказано для образа
 ```
 
-Include in the PR description: **the store path** you reproduced (`/nix/store/<hash>-<name>`) and the **tarball sha256** from two `dockerImg` builds. Those two strings are the artifact of this lab.
+Включите в описание PR: **путь в store**, который вы воспроизвели (`/nix/store/<hash>-<name>`), и **sha256 tarball** из двух сборок `dockerImg`. Эти две строки — артефакт этой лабораторной.
 
 ---
 
-## Acceptance Criteria
+## Критерии приёмки
 
-### Task 1 — Flake builds the app (6 pts)
-- ✅ `labs/lab18/flake.nix` written from the skeleton (`description`, `inputs`, `outputs` all filled)
-- ✅ `inputs.nixpkgs.url` pinned to a **release tag** (e.g. `nixos-25.11`) — **not** `nixpkgs-unstable`
-- ✅ `packages.${system}.default` builds with one of `writeShellApplication`, `mkDerivation`, `buildPythonApplication`, or `buildGoModule` — choice defended in `submission18.md`
-- ✅ `flake.lock` present, **committed**, and shown in the submission with the `locked.rev` field highlighted
-- ✅ `nix build` produces a working binary at `result/bin/<name>` that runs the Lab 1 service logic
+### Задача 1 — Flake собирает приложение (6 баллов)
+- ✅ `labs/lab18/flake.nix` написан по скелету (`description`, `inputs`, `outputs` все заполнены)
+- ✅ `inputs.nixpkgs.url` зафиксирован на **release-тег** (например, `nixos-25.11`) — **не** `nixpkgs-unstable`
+- ✅ `packages.${system}.default` собирается одним из `writeShellApplication`, `mkDerivation`, `buildPythonApplication` или `buildGoModule` — выбор обоснован в `submission18.md`
+- ✅ `flake.lock` присутствует, **закоммичен** и показан в сдаче с выделенным полем `locked.rev`
+- ✅ `nix build` создаёт работающий бинарник в `result/bin/<name>`, который запускает логику сервиса из лабораторной 1
 
-### Task 2 — `dockerTools` image (4 pts)
-- ✅ `packages.${system}.dockerImg` added to the flake
-- ✅ `buildLayeredImage` `contents` includes the Task-1 package
-- ✅ `config.Cmd` points at the binary in exec form
-- ✅ `config.ExposedPorts` set
-- ✅ `created` is a **fixed epoch string** (not `"now"`) — typically `"1970-01-01T00:00:01Z"`
-- ✅ `nix build .#dockerImg` produces a tarball; `docker load < result` succeeds; the loaded image runs and serves `/health`
-- ✅ Two `docker build` runs of the Lab 2 Dockerfile show **differing** `docker save | sha256sum` outputs, captured in `submission18.md`
+### Задача 2 — образ `dockerTools` (4 балла)
+- ✅ `packages.${system}.dockerImg` добавлен в flake
+- ✅ `contents` в `buildLayeredImage` включает пакет из задачи 1
+- ✅ `config.Cmd` указывает на бинарник в exec-форме
+- ✅ `config.ExposedPorts` задан
+- ✅ `created` — **строка фиксированной эпохи** (не `"now"`) — обычно `"1970-01-01T00:00:01Z"`
+- ✅ `nix build .#dockerImg` создаёт tarball; `docker load < result` успешен; загруженный образ запускается и обслуживает `/health`
+- ✅ два запуска `docker build` для Dockerfile лабораторной 2 показывают **различающиеся** выводы `docker save | sha256sum`, зафиксированные в `submission18.md`
 
-### Bonus — Bit-for-bit proof (2 pts)
-- ✅ Two independent `nix build .#default` runs (the second forcing a real rebuild) produce the **identical** `/nix/store/<hash>-<name>` path
-- ✅ Two independent `nix build .#dockerImg` runs produce the **identical** `sha256sum result` digest
-- ✅ Nix's own "identical store path / checking outputs" confirmation captured
-- ✅ Paragraph in `submission18.md` explaining the role of `flake.lock` vs `requirements.txt` / Helm image tag
+### Бонус — Побитовое доказательство (2 балла)
+- ✅ два независимых запуска `nix build .#default` (второй заставляет реальную пересборку) дают **идентичный** путь `/nix/store/<hash>-<name>`
+- ✅ два независимых запуска `nix build .#dockerImg` дают **идентичный** дайджест `sha256sum result`
+- ✅ зафиксировано собственное подтверждение Nix «identical store path / checking outputs»
+- ✅ абзац в `submission18.md`, объясняющий роль `flake.lock` против `requirements.txt` / тега образа Helm
 
 ---
 
-## Rubric
+## Рубрика
 
-| Task | Points | Criteria |
+| Задача | Баллы | Критерии |
 |------|-------:|----------|
-| **Task 1** — Flake + lock + build | **6** | Outer shape filled, nixpkgs pinned to a release tag, derivation builder chosen correctly, `flake.lock` committed, binary runs |
-| **Task 2** — `dockerTools` image | **4** | Image output added, `created` epoch trick applied, image loads & runs, contrast vs Lab 2 documented with both `sha256sum`s |
-| **Bonus** — Bit-for-bit proof | **2** | Two builds → identical store path AND identical image sha256; Nix's own equality check captured |
-| **Total** | **12** | 10 main + 2 bonus |
+| **Задача 1** — Flake + lock + сборка | **6** | Внешняя форма заполнена, nixpkgs зафиксирован на release-тег, построитель derivation выбран правильно, `flake.lock` закоммичен, бинарник запускается |
+| **Задача 2** — образ `dockerTools` | **4** | Выход образа добавлен, применён трюк с эпохой `created`, образ загружается и запускается, контраст с лабораторной 2 задокументирован с обеими `sha256sum` |
+| **Бонус** — Побитовое доказательство | **2** | Две сборки → идентичный путь в store И идентичный sha256 образа; зафиксирована собственная проверка равенства Nix |
+| **Итого** | **12** | 10 основных + 2 бонусных |
 
-**Grading guidance:**
-- **10/10 main** — Flake builds, image loads, proof of reproducibility is clean, `flake.lock` discussion shows understanding of *why* it matters
-- **8–9/10** — Builds work; reproducibility claim shown but missing one of the headline artifacts (store path **or** image sha256)
-- **6–7/10** — Task 1 works; Task 2 image builds but the `created` epoch isn't applied, or the Lab-2 contrast isn't measured
-- **<6/10** — Flake doesn't build, `flake.lock` missing, or `nixpkgs-unstable` used (reproducibility not actually achieved)
+**Руководство по оцениванию:**
+- **10/10 основных** — Flake собирается, образ загружается, доказательство воспроизводимости чистое, обсуждение `flake.lock` показывает понимание *почему* он важен
+- **8–9/10** — Сборки работают; утверждение о воспроизводимости показано, но отсутствует один из заголовочных артефактов (путь в store **или** sha256 образа)
+- **6–7/10** — Задача 1 работает; образ из задачи 2 собирается, но эпоха `created` не применена, или контраст с лабораторной 2 не измерен
+- **<6/10** — Flake не собирается, `flake.lock` отсутствует или использован `nixpkgs-unstable` (воспроизводимость фактически не достигнута)
 
 ---
 
-## Resources
+## Ресурсы
 
 <details>
-<summary>📚 Nix fundamentals</summary>
+<summary>📚 Основы Nix</summary>
 
-- [nix.dev](https://nix.dev/) — official tutorials
-- [Zero to Nix](https://zero-to-nix.com/) — Determinate Systems' beginner track (flakes-first)
-- [Nix Pills](https://nixos.org/guides/nix-pills/) — deep dive for the curious
-- [NixOS package search](https://search.nixos.org/) — find the `pkgs.<name>` you need
+- [nix.dev](https://nix.dev/) — официальные руководства
+- [Zero to Nix](https://zero-to-nix.com/) — начальный трек Determinate Systems (flakes в первую очередь)
+- [Nix Pills](https://nixos.org/guides/nix-pills/) — глубокое погружение для любопытных
+- [NixOS package search](https://search.nixos.org/) — найдите нужный вам `pkgs.<name>`
 
 </details>
 
 <details>
-<summary>📦 Flakes, dockerTools, and proof</summary>
+<summary>📦 Flakes, dockerTools и доказательство</summary>
 
 - [Flakes — NixOS Wiki](https://wiki.nixos.org/wiki/Flakes)
 - [Practical Nix Flakes — Serokell](https://serokell.io/blog/practical-nix-flakes)
-- [FlakeHub](https://flakehub.com/) — SemVer flakes registry
+- [FlakeHub](https://flakehub.com/) — реестр SemVer flakes
 - [`dockerTools` reference](https://nixos.org/manual/nixpkgs/stable/#sec-pkgs-dockerTools)
-- [`nix build --help`](https://nix.dev/manual/nix/stable/command-ref/new-cli/nix3-build.html) — the flag you want for the Bonus lives here
-- [Reproducible Builds project](https://reproducible-builds.org/) — why this matters beyond Nix
+- [`nix build --help`](https://nix.dev/manual/nix/stable/command-ref/new-cli/nix3-build.html) — нужный для бонуса флаг живёт здесь
+- [Reproducible Builds project](https://reproducible-builds.org/) — почему это важно за пределами Nix
 
 </details>
 
 <details>
-<summary>🐧 Container-Nix vs host-Nix</summary>
+<summary>🐧 Container-Nix против host-Nix</summary>
 
-- [`nixos/nix` Docker images](https://hub.docker.com/r/nixos/nix) — pinned tags (use `2.34.0` or any 2.25+)
-- [Determinate Nix](https://determinate.systems/) — host installer with flakes-on-default
-- [Lix](https://lix.systems/) — community fork, drop-in `nix` replacement
-
-</details>
-
-<details>
-<summary>⚠️ Common Pitfalls (from real dry-runs)</summary>
-
-- **Flakes only see git-tracked files** — if you `nix build` before `git add flake.nix flake.lock app/`, Nix reports `path 'flake.nix' does not exist` or evaluates against an empty source tree. **Always `git add` first**, then build. This is THE most common Lab-18 mistake. (Reference dry-run hit it.)
-- **`safe.directory` inside the `nixos/nix` container** — the container runs as `root` (uid 0); your bind-mounted repo on the host is owned by your uid. `nix build` invokes libgit2, which refuses with `repository path '/work/' is not owned by current user`. Fix once: `git config --global --add safe.directory /work` inside the container. This is a **containerized-Nix artifact**, not a flake defect; host-Nix doesn't hit it.
-- **`dockerTools.buildLayeredImage` with `created = "now"` defeats reproducibility** — every build will produce a different image hash. Reading the docs you'll see `"now"` mentioned as the default for `buildImage`; that's exactly what you must override. Use `"1970-01-01T00:00:01Z"` (one second past the epoch — the literal epoch is rejected by some tooling).
-- **`inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable"`** — the branch tip moves daily, so today's build won't match next week's. The whole point of reproducibility is gone. Use a release tag (`nixos-25.11`) or pin a specific commit SHA.
-- **`nix flake update` rewrites `flake.lock`** — don't run it casually before a proof of reproducibility, or you'll change the closure under your own feet. Run it once after writing `flake.nix`, commit `flake.lock`, then leave it alone for the rest of the lab.
-- **`writeShellApplication` rejects unset variables** — it injects `set -euo pipefail` for you. If your script reads `$HOSTNAME` and you forgot to add `runtimeInputs = [ pkgs.inetutils ];` (or set the variable explicitly), the build passes but the script fails at runtime. Cleaner to use a Nix-resolved value.
-- **`nix-store --delete` to "force a rebuild" is brittle** — Nix may legitimately recover the cached output from elsewhere. Use `nix build --rebuild` for the Bonus proof; it explicitly does what you want (real rebuild + output-equality check).
-- **`format = "other"` in `buildPythonApplication`** — required when your source has no `pyproject.toml` / `setup.py`. Without it, Nix tries to invoke `pip install .` and fails. Single-file Flask apps almost always need `format = "other"`.
-- **`USER` in `dockerTools` config is a string, not a number** — `config.User = "1000:1000"` works; `config.User = 1000` evaluates fine but Docker may complain on `docker run`. Use the `"uid:gid"` form.
+- [`nixos/nix` Docker images](https://hub.docker.com/r/nixos/nix) — фиксированные теги (используйте `2.34.0` или любой 2.25+)
+- [Determinate Nix](https://determinate.systems/) — установщик на хост с flakes по умолчанию
+- [Lix](https://lix.systems/) — форк от сообщества, drop-in замена `nix`
 
 </details>
 
 <details>
-<summary>💡 Tips</summary>
+<summary>⚠️ Частые подводные камни (из реальных прогонов)</summary>
 
-1. Store paths are content-addressed: same inputs → same output hash. Always.
-2. `nix-shell -p <pkg>` (classic CLI) or `nix shell nixpkgs#<pkg>` (new CLI) drops you into a shell with that package on `$PATH` — great for testing a dep before adding it to your derivation.
-3. `nix-collect-garbage -d` frees disk space taken by old builds.
-4. Builds are sandboxed with **no network** — every dependency must be declared. If the build mysteriously needs internet, you're missing an input.
-5. Use a **release branch** for `nixpkgs` (`nixos-25.11`, `nixos-24.05`) — *not* unstable. The release tag is what makes "build today and in 2036" make sense.
-6. `nix flake show` lists every output your flake exposes. Useful when your `packages.${system}` block grows.
+- **Flakes видят только отслеживаемые git файлы** — если вы запустите `nix build` до `git add flake.nix flake.lock app/`, Nix сообщит `path 'flake.nix' does not exist` или вычислит против пустого дерева исходников. **Всегда сначала `git add`**, затем собирайте. Это САМАЯ частая ошибка лабораторной 18. (Эталонный прогон на неё наткнулся.)
+- **`safe.directory` внутри контейнера `nixos/nix`** — контейнер работает как `root` (uid 0); ваш bind-mounted репозиторий на хосте принадлежит вашему uid. `nix build` вызывает libgit2, который отказывает с `repository path '/work/' is not owned by current user`. Исправьте один раз: `git config --global --add safe.directory /work` внутри контейнера. Это **артефакт контейнеризованного Nix**, а не дефект flake; host-Nix с ним не сталкивается.
+- **`dockerTools.buildLayeredImage` с `created = "now"` сводит на нет воспроизводимость** — каждая сборка создаст разный хеш образа. Читая документацию, вы увидите `"now"`, упоминаемый как значение по умолчанию для `buildImage`; именно это вам и нужно переопределить. Используйте `"1970-01-01T00:00:01Z"` (на секунду позже эпохи — буквальную эпоху отвергают некоторые инструменты).
+- **`inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable"`** — верхушка ветки движется ежедневно, поэтому сегодняшняя сборка не совпадёт с той, что на следующей неделе. Весь смысл воспроизводимости исчезает. Используйте release-тег (`nixos-25.11`) или зафиксируйте конкретный SHA коммита.
+- **`nix flake update` переписывает `flake.lock`** — не запускайте её небрежно перед доказательством воспроизводимости, иначе вы измените замыкание под собственными ногами. Запустите её один раз после написания `flake.nix`, закоммитьте `flake.lock`, затем не трогайте до конца лабораторной.
+- **`writeShellApplication` отвергает незаданные переменные** — он внедряет за вас `set -euo pipefail`. Если ваш скрипт читает `$HOSTNAME` и вы забыли добавить `runtimeInputs = [ pkgs.inetutils ];` (или явно задать переменную), сборка пройдёт, но скрипт упадёт во время выполнения. Чище использовать значение, разрешённое Nix.
+- **`nix-store --delete` для «принудительной пересборки» хрупок** — Nix может законно восстановить закэшированный вывод откуда-то ещё. Используйте `nix build --rebuild` для бонусного доказательства; он явно делает то, что вам нужно (реальная пересборка + проверка равенства вывода).
+- **`format = "other"` в `buildPythonApplication`** — требуется, когда в ваших исходниках нет `pyproject.toml` / `setup.py`. Без него Nix пытается вызвать `pip install .` и падает. Однофайловые приложения Flask почти всегда нуждаются в `format = "other"`.
+- **`USER` в конфиге `dockerTools` — строка, а не число** — `config.User = "1000:1000"` работает; `config.User = 1000` вычисляется нормально, но Docker может пожаловаться на `docker run`. Используйте форму `"uid:gid"`.
+
+</details>
+
+<details>
+<summary>💡 Советы</summary>
+
+1. Пути в store контентно-адресуемы: те же входы → тот же хеш вывода. Всегда.
+2. `nix-shell -p <pkg>` (классический CLI) или `nix shell nixpkgs#<pkg>` (новый CLI) помещает вас в shell с этим пакетом в `$PATH` — отлично для тестирования зависимости перед добавлением её в derivation.
+3. `nix-collect-garbage -d` освобождает место на диске, занятое старыми сборками.
+4. Сборки в песочнице с **без сети** — каждая зависимость должна быть объявлена. Если сборка загадочно требует интернет, вам не хватает входа.
+5. Используйте **release-ветку** для `nixpkgs` (`nixos-25.11`, `nixos-24.05`) — *не* unstable. Именно release-тег делает осмысленным «собрать сегодня и в 2036».
+6. `nix flake show` перечисляет каждый выход, который предоставляет ваш flake. Полезно, когда ваш блок `packages.${system}` растёт.
 
 </details>
 
 ---
 
-## Looking Ahead
+## Взгляд вперёд
 
-Nix is **orthogonal** to the orchestration you spent the rest of the course mastering — it solves reproducibility, not scheduling. Where you'll meet it again:
+Nix **ортогонален** оркестрации, которую вы осваивали остальную часть курса — он решает воспроизводимость, а не планирование. Где вы с ним ещё встретитесь:
 
-| Domain | What Nix adds |
+| Область | Что добавляет Nix |
 |---|---|
-| CI | One-line `nix build` instead of "install N tools" pre-steps; build cache via Cachix |
-| Dev shells | `nix develop` gives every contributor identical Python/Node/Go versions — no `venv`/`asdf`/`nvm` drift |
-| Image builds | `dockerTools` images plug into the same registries / Helm charts you used in Labs 10-13 |
-| Security audit | The closure is the artifact; SBOM is by construction |
-| NixOS | If you ever want the same purity at the **OS** level |
+| CI | Однострочный `nix build` вместо предварительных шагов «установи N инструментов»; кэш сборки через Cachix |
+| Dev-shells | `nix develop` даёт каждому контрибьютору идентичные версии Python/Node/Go — без дрейфа `venv`/`asdf`/`nvm` |
+| Сборка образов | Образы `dockerTools` подключаются к тем же реестрам / Helm-чартам, которые вы использовали в лабораторных 10-13 |
+| Аудит безопасности | Замыкание — это артефакт; SBOM по построению |
+| NixOS | Если вы когда-нибудь захотите такой же чистоты на уровне **ОС** |
 
 ---
 
-**Hot take:** containers solved *deployment*. Nix solves *the build*. Two different problems, two different tools — and the only way to know yours actually ships what you wrote is to build it twice and watch the hashes match. ❄️
+**Горячее мнение:** контейнеры решили *развёртывание*. Nix решает *сборку*. Две разные задачи, два разных инструмента — и единственный способ узнать, что ваш действительно поставляет то, что вы написали, — собрать его дважды и увидеть, что хеши совпадают. ❄️

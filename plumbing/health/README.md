@@ -1,28 +1,28 @@
-# Plumbing — `health` service
+# Вспомогательный сервис — `health`
 
-A second instructor-maintained plumbing service. Introduced in **Lab 13** as the
-**third** service in your topology — the additional target ArgoCD's `ApplicationSet`
-needs in order to generate multiple Applications (the pattern only makes sense at ≥ 3 apps).
+Второй вспомогательный сервис, поддерживаемый преподавателем. Введён в **лабораторной 13** как
+**третий** сервис в вашей топологии — дополнительная цель, нужная `ApplicationSet` в ArgoCD,
+чтобы генерировать несколько Application (паттерн имеет смысл только при ≥ 3 приложениях).
 
-## Endpoints
+## Эндпоинты
 
-| Path | Behaviour |
+| Путь | Поведение |
 |------|-----------|
-| `GET /` | JSON status — service, version, hostname, Go version, uptime, request counter |
-| `GET /healthz` | Returns `ok` (200) for probes |
-| `GET /metrics` | Prometheus text format — `health_requests_total`, `health_uptime_seconds` |
+| `GET /` | JSON-статус — сервис, версия, hostname, версия Go, uptime, счётчик запросов |
+| `GET /healthz` | Возвращает `ok` (200) для проб |
+| `GET /metrics` | Текстовый формат Prometheus — `health_requests_total`, `health_uptime_seconds` |
 
-## Used in
+## Где используется
 
-- **Lab 13** — third Application in your ArgoCD ApplicationSet (Python service + echo + health)
-- **Lab 14** — extra rollout target for blue-green vs canary experimentation
-- **Lab 16** — included in cluster-wide kube-prometheus scrape
+- **Лабораторная 13** — третье Application в вашем ArgoCD ApplicationSet (Python-сервис + echo + health)
+- **Лабораторная 14** — дополнительная цель развёртывания для экспериментов blue-green против canary
+- **Лабораторная 16** — включён в кластерный сбор kube-prometheus
 
-The pre-built image is published from the course repo CI to `ghcr.io/inno-devops-labs/health:vX.Y.Z`.
+Предварительно собранный образ публикуется из CI репозитория курса в `ghcr.io/inno-devops-labs/health:vX.Y.Z`.
 
-## Configuration
+## Конфигурация
 
-| Env var | Default |
+| Переменная окружения | По умолчанию |
 |---------|---------|
 | `PORT` | `8082` |
 | `VERSION` | `v1.0.0` |

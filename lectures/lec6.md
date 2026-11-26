@@ -1,52 +1,52 @@
-# 📌 Lecture 6 — Advanced Ansible & Continuous Deployment
+# 📌 Лекция 6 — Продвинутый Ansible и непрерывное развёртывание
 
-## 📍 Slide 1 – 🚀 Welcome to Continuous Deployment
+## 📍 Слайд 1 – 🚀 Добро пожаловать в непрерывное развёртывание
 
-* 🧩 Lecture 5 gave you **playbooks, roles, inventory, idempotency, basic modules** — you can configure a server
-* 🚀 Today: turn that into a **deployment pipeline** — push to `main`, app on the box, rollback in minutes
-* 🛠️ Production patterns: `block`/`rescue`/`always`, tags, Jinja2-templated Docker Compose, GitHub Actions runners
-* 🎯 Stack pinned for May 2026: **ansible-core 2.21**, **Docker Compose v2**, `community.docker` 4.x
+* 🧩 Лекция 5 дала вам **playbook'и, роли, инвентарь, идемпотентность, базовые модули** — вы умеете настраивать сервер
+* 🚀 Сегодня: превращаем это в **конвейер развёртывания** — push в `main`, приложение на машине, откат за минуты
+* 🛠️ Продакшен-паттерны: `block`/`rescue`/`always`, теги, Docker Compose с шаблонами Jinja2, раннеры GitHub Actions
+* 🎯 Стек, зафиксированный на май 2026: **ansible-core 2.21**, **Docker Compose v2**, `community.docker` 4.x
 
 ```mermaid
 flowchart LR
-  Config[⚙️ Lab 5: Configure] --> Deploy[🚀 Lab 6: Deploy]
-  Deploy --> Rollback[🔙 Roll back fast]
+  Config[⚙️ Лаб. 5: настройка] --> Deploy[🚀 Лаб. 6: развёртывание]
+  Deploy --> Rollback[🔙 Быстрый откат]
 ```
 
-> 🔗 **Tie-in to Lab 6:** you refactor Lab 5's playbooks with blocks + tags, template a `docker-compose.yml.j2`, add `web_app_wipe` clean-reinstall logic, and trigger the whole thing from GitHub Actions on every push to `ansible/**`.
+> 🔗 **Связь с лабораторной 6:** вы отрефакторите playbook'и из лабораторной 5 с помощью блоков и тегов, сделаете шаблон `docker-compose.yml.j2`, добавите логику чистой переустановки `web_app_wipe` и запустите всё это из GitHub Actions на каждый push в `ansible/**`.
 
 ---
 
-## 📍 Slide 2 – 🎯 Learning Outcomes
+## 📍 Слайд 2 – 🎯 Результаты обучения
 
-| # | Outcome |
+| # | Результат |
 |---|---------|
-| 1 | 🧱 Use `block` / `rescue` / `always` for fail-fast playbooks |
-| 2 | 🏷️ Design a tag strategy that supports `--tags` and `--skip-tags` |
-| 3 | 📝 Template `docker-compose.yml` with Jinja2 + `community.docker.docker_compose_v2` |
-| 4 | 🧹 Implement double-gated wipe logic (variable + tag) |
-| 5 | 🤖 Run Ansible from GitHub Actions with secrets and path filters |
-| 6 | 🔙 Reason about rolling, all-at-once, and serial-percentage rollouts |
+| 1 | 🧱 Использовать `block` / `rescue` / `always` для playbook'ов с быстрым отказом |
+| 2 | 🏷️ Спроектировать стратегию тегов, поддерживающую `--tags` и `--skip-tags` |
+| 3 | 📝 Шаблонизировать `docker-compose.yml` через Jinja2 + `community.docker.docker_compose_v2` |
+| 4 | 🧹 Реализовать логику очистки с двойным шлюзом (переменная + тег) |
+| 5 | 🤖 Запускать Ansible из GitHub Actions с секретами и фильтрами путей |
+| 6 | 🔙 Рассуждать о раскатках rolling, all-at-once и serial-percentage |
 
-> ⚙️ **Prerequisites from Lecture 5:** YAML playbook syntax, role layout (`tasks/`, `handlers/`, `defaults/`, `meta/`), inventory + group_vars, Ansible Vault. We will **not** re-introduce those.
-
----
-
-## 📍 Slide 3 – 🔥 From Configuration to Delivery
-
-Lecture 5 ended with: *"the server is configured — now what?"*
-
-* 📦 Configuration management answers **what should be installed**
-* 🚀 Continuous deployment answers **what version is running, right now**
-* 🔄 Same playbook engine, different cadence — provision once a quarter, deploy ten times a day
-
-> 🔥 **Hot take:** if your deploy script is a Bash file someone SSHs into the box to run, you have automation **for setup** but not **for delivery**. Same gap as Dev vs Ops in Lecture 1.
+> ⚙️ **Предварительные требования из лекции 5:** синтаксис YAML-playbook'ов, структура ролей (`tasks/`, `handlers/`, `defaults/`, `meta/`), инвентарь + group_vars, Ansible Vault. Мы **не** будем вводить их заново.
 
 ---
 
-## 📍 Slide 4 – 😱 Manual Deploy Hell
+## 📍 Слайд 3 – 🔥 От конфигурации к доставке
 
-The real-world script most teams start with:
+Лекция 5 закончилась вопросом: *«сервер настроен — и что дальше?»*
+
+* 📦 Управление конфигурацией отвечает на вопрос **что должно быть установлено**
+* 🚀 Непрерывное развёртывание отвечает на вопрос **какая версия работает прямо сейчас**
+* 🔄 Тот же движок playbook'ов, другая частота — провижининг раз в квартал, развёртывание десять раз в день
+
+> 🔥 **Смелое утверждение:** если ваш скрипт развёртывания — это Bash-файл, на который кто-то заходит по SSH, чтобы запустить, у вас есть автоматизация **для настройки**, но не **для доставки**. Тот же разрыв, что между Dev и Ops в лекции 1.
+
+---
+
+## 📍 Слайд 4 – 😱 Ад ручного развёртывания
+
+Реальный скрипт, с которого начинает большинство команд:
 
 ```bash
 ssh prod-1
@@ -55,35 +55,35 @@ docker stop app; docker rm app
 docker pull myorg/app:latest && docker run -d --name app -p 80:8080 myorg/app:latest
 ```
 
-Why it breaks at scale:
+Почему это ломается при масштабировании:
 
-* 🐢 SSH to N hosts in sequence — minutes per deploy, hours at 50 hosts
-* 🤷 No record of *what* shipped *when* — `:latest` is mutable
-* 💥 Failure on host 3 leaves 1+2 on new code, 3-N on old — **split-brain prod**
-* 🌙 Nobody dares deploy on Friday because there is no rollback button
+* 🐢 SSH на N хостов последовательно — минуты на развёртывание, часы на 50 хостах
+* 🤷 Нет записи о том, *что* выкатили и *когда* — `:latest` изменяем
+* 💥 Сбой на хосте 3 оставляет 1+2 на новом коде, 3-N на старом — **расколотый продакшен**
+* 🌙 Никто не рискует развёртывать в пятницу, потому что нет кнопки отката
 
-> 📊 DORA 2024: **change failure rate** for low performers is **46–60%**. Most are bad manual deploys, not bad code.
+> 📊 DORA 2024: **доля неудачных изменений** у отстающих — **46–60%**. Большинство — плохие ручные развёртывания, а не плохой код.
 
 ---
 
-## 📍 Slide 5 – 🔙 Rollback Nightmares
+## 📍 Слайд 5 – 🔙 Кошмары отката
 
-Reverting code is the easy part. What about:
+Откатить код — простая часть. А как насчёт:
 
-| 🔥 Concern | 💥 What blows up |
+| 🔥 Забота | 💥 Что взрывается |
 |------------|------------------|
-| 💾 Database migration | New schema deployed; old binary can't read it |
-| ⚙️ Config drift | Restarted container picks up new env vars only |
-| 🏷️ Mutable tag | `myorg/app:latest` now points to the broken build |
-| 🔐 Secret rotation | New Vault value already pulled; rollback hits 403s |
+| 💾 Миграция базы данных | Новые схемы развёрнуты; старый бинарник не может их прочитать |
+| ⚙️ Дрейф конфигурации | Перезапущенный контейнер подхватывает только новые переменные окружения |
+| 🏷️ Изменяемый тег | `myorg/app:latest` теперь указывает на сломанную сборку |
+| 🔐 Ротация секретов | Новое значение Vault уже получено; откат ловит 403 |
 
-> ⚠️ **Rule of thumb:** if you can't roll back in **under 5 minutes**, you don't really deploy — you *commit*. Lab 6's wipe logic + immutable tag (`docker_tag: 1.2.3`) is the floor.
+> ⚠️ **Практическое правило:** если вы не можете откатиться **меньше чем за 5 минут**, вы на самом деле не развёртываете — вы *фиксируете*. Логика очистки из лабораторной 6 + неизменяемый тег (`docker_tag: 1.2.3`) — это минимум.
 
 ---
 
-## 📍 Slide 6 – 🧱 Blocks: Group + Handle Errors
+## 📍 Слайд 6 – 🧱 Блоки: группировка + обработка ошибок
 
-In Lab 5 you wrote linear task lists. A `block` groups tasks under shared directives **and** lets you handle failures.
+В лабораторной 5 вы писали линейные списки задач. `block` группирует задачи под общими директивами **и** позволяет обрабатывать сбои.
 
 ```yaml
 - name: Install Docker engine
@@ -102,36 +102,36 @@ In Lab 5 you wrote linear task lists. A `block` groups tasks under shared direct
   tags: [docker, docker_install]
 ```
 
-> 📖 `block` accepts `become`, `when`, `tags`, `vars` — applied to every task inside. Way cleaner than copy-pasting `become: true` everywhere.
+> 📖 `block` принимает `become`, `when`, `tags`, `vars` — они применяются к каждой задаче внутри. Гораздо чище, чем копипастить `become: true` везде.
 
 ---
 
-## 📍 Slide 7 – 🎯 Block / Rescue / Always Semantics
+## 📍 Слайд 7 – 🎯 Семантика Block / Rescue / Always
 
 ```mermaid
 flowchart TD
-  Block[🧱 block: try these] -->|✅ all ok| Always[♾️ always]
-  Block -->|❌ any task fails| Rescue[🔧 rescue]
+  Block[🧱 block: попробуй это] -->|✅ всё ок| Always[♾️ always]
+  Block -->|❌ любая задача падает| Rescue[🔧 rescue]
   Rescue --> Always
-  Rescue -->|❌ rescue also fails| Fail[💀 host marked failed]
+  Rescue -->|❌ rescue тоже падает| Fail[💀 хост помечен как сбойный]
 ```
 
-* 🟢 `block` succeeds → `always` runs
-* 🔴 task in `block` fails → `rescue` runs → `always` runs → host **continues** if rescue succeeded
-* ⛔ `rescue` also fails → host marked failed, `always` still runs (cleanup is sacred)
+* 🟢 `block` успешен → выполняется `always`
+* 🔴 задача в `block` падает → выполняется `rescue` → выполняется `always` → хост **продолжает** работу, если rescue успешен
+* ⛔ `rescue` тоже падает → хост помечается как сбойный, `always` всё равно выполняется (очистка священна)
 
-> ⚠️ `rescue` does **not** mean "ignore errors" — it means "I have a recovery plan." Without rescue, the playbook stops on the failing host.
+> ⚠️ `rescue` **не** означает «игнорировать ошибки» — он означает «у меня есть план восстановления». Без rescue playbook останавливается на сбойном хосте.
 
 ---
 
-## 📍 Slide 8 – ⚡ Fail-Fast vs Forgive
+## 📍 Слайд 8 – ⚡ Быстрый отказ vs снисходительность
 
-| 🎚️ Strategy | When | Example |
+| 🎚️ Стратегия | Когда | Пример |
 |--------------|------|---------|
-| ❌ **Fail fast** (default) | Provisioning, migrations | A failed Docker install must stop the run |
-| 🔄 **Rescue + retry** | Flaky network, GPG mirrors | Re-run `apt update` after 10s |
-| 😶 `ignore_errors: yes` | Cosmetic cleanups | `rm /tmp/stale.lock` you don't care about |
-| 🔁 `until:` + `retries:` | Health checks | Wait up to 10 × 6s for `/health` 200 |
+| ❌ **Быстрый отказ** (по умолчанию) | Провижининг, миграции | Неудачная установка Docker должна остановить прогон |
+| 🔄 **Rescue + повтор** | Нестабильная сеть, GPG-зеркала | Повторить `apt update` через 10 с |
+| 😶 `ignore_errors: yes` | Косметическая очистка | `rm /tmp/stale.lock`, который вам не важен |
+| 🔁 `until:` + `retries:` | Проверки состояния | Ждать до 10 × 6 с ответа `/health` 200 |
 
 ```yaml
 - name: Wait for app to come up
@@ -144,38 +144,38 @@ flowchart TD
   until: hc.status == 200
 ```
 
-> 🔥 **Anti-pattern:** sprinkling `ignore_errors: yes` to green up CI. You just turned a deploy into a coin flip.
+> 🔥 **Антипаттерн:** посыпать всё `ignore_errors: yes`, чтобы CI стал зелёным. Вы только что превратили развёртывание в бросок монетки.
 
 ---
 
-## 📍 Slide 9 – 🏷️ Tags: Run Only What You Need
+## 📍 Слайд 9 – 🏷️ Теги: запускайте только то, что нужно
 
-Tags label tasks so you can pick subsets at run time. Every task, block, or role can be tagged.
+Теги помечают задачи, чтобы вы могли выбирать подмножества во время запуска. Каждая задача, блок или роль могут быть помечены тегом.
 
 ```bash
 ansible-playbook site.yml --tags "docker,app_deploy"
 ansible-playbook site.yml --skip-tags "common"
 ansible-playbook site.yml --list-tags
-ansible-playbook site.yml --tags "docker" --check     # dry-run
+ansible-playbook site.yml --tags "docker" --check     # пробный прогон
 ```
 
-* 🏷️ Tags **inherit** down — a tag on a block applies to every task inside
-* 🔒 Two **special tags**: `always` (always runs unless skipped) and `never` (never runs unless asked)
-* 📦 Roles can be tagged at import time: `roles: [{ role: docker, tags: [docker] }]`
+* 🏷️ Теги **наследуются** вниз — тег на блоке применяется к каждой задаче внутри
+* 🔒 Два **специальных тега**: `always` (выполняется всегда, если не пропущен) и `never` (не выполняется, пока не запрошен)
+* 📦 Роли можно помечать при импорте: `roles: [{ role: docker, tags: [docker] }]`
 
-> 🔥 **In Lab 6** you tag at three levels — role, block, individual task — so `--tags docker_install` reaches the right slice without dragging in unrelated work.
+> 🔥 **В лабораторной 6** вы ставите теги на трёх уровнях — роль, блок, отдельная задача — чтобы `--tags docker_install` попадал в нужный срез, не затягивая постороннюю работу.
 
 ---
 
-## 📍 Slide 10 – 🗂️ A Tag Strategy That Survives
+## 📍 Слайд 10 – 🗂️ Стратегия тегов, которая выживает
 
-Pick **three tag axes** and stick to them:
+Выберите **три оси тегов** и придерживайтесь их:
 
-| 🧭 Axis | Tag names | Example |
+| 🧭 Ось | Имена тегов | Пример |
 |---------|-----------|---------|
-| 🧩 **Component** | `common`, `docker`, `web_app` | `--tags docker` to touch only the docker role |
-| 🛠️ **Action** | `install`, `config`, `deploy`, `wipe` | `--tags deploy` skips installs |
-| ⚠️ **Risk gate** | `web_app_wipe`, `db_migrate` | Dangerous, opt-in only |
+| 🧩 **Компонент** | `common`, `docker`, `web_app` | `--tags docker` затрагивает только роль docker |
+| 🛠️ **Действие** | `install`, `config`, `deploy`, `wipe` | `--tags deploy` пропускает установки |
+| ⚠️ **Шлюз риска** | `web_app_wipe`, `db_migrate` | Опасные, только по запросу |
 
 ```yaml
 - name: Application deployment
@@ -185,16 +185,16 @@ Pick **three tag axes** and stick to them:
 - name: Application wipe
   block: [...]
   when: web_app_wipe | bool
-  tags: [web_app, web_app_wipe]   # gated by both when + tag
+  tags: [web_app, web_app_wipe]   # защищено и when, и тегом
 ```
 
-> 📖 **Source:** Ansible docs — *Tags* and *Common Tagging Patterns*. A clean tag taxonomy is the difference between a 10-minute deploy and a 90-minute one.
+> 📖 **Источник:** документация Ansible — *Tags* и *Common Tagging Patterns*. Чистая таксономия тегов — разница между 10-минутным и 90-минутным развёртыванием.
 
 ---
 
-## 📍 Slide 11 – 📝 Jinja2 — The Templating Layer
+## 📍 Слайд 11 – 📝 Jinja2 — слой шаблонизации
 
-Ansible's `template` module renders **Jinja2** files at runtime. Lecture 5 used it in passing; Lab 6 leans on it heavily.
+Модуль `template` в Ansible рендерит файлы **Jinja2** во время выполнения. Лекция 5 использовала его вскользь; лабораторная 6 опирается на него сильно.
 
 ```jinja
 {# roles/web_app/templates/docker-compose.yml.j2 #}
@@ -210,37 +210,37 @@ services:
     restart: {{ restart_policy | default('unless-stopped') }}
 ```
 
-* `{{ var }}` — interpolation
-* `{% for %}` / `{% if %}` — control flow
-* `| default('x')`, `| upper`, `| to_json` — **filters** chain with `|`
+* `{{ var }}` — интерполяция
+* `{% for %}` / `{% if %}` — управляющие конструкции
+* `| default('x')`, `| upper`, `| to_json` — **фильтры** объединяются через `|`
 
-> ⚠️ Compose v2 dropped the `version:` top-level field. If a tutorial still writes `version: '3.8'`, it predates 2023 — leave it off.
+> ⚠️ Compose v2 убрал поле верхнего уровня `version:`. Если учебник всё ещё пишет `version: '3.8'`, он старше 2023 года — не указывайте его.
 
 ---
 
-## 📍 Slide 12 – 🎛️ Useful Jinja2 Filters
+## 📍 Слайд 12 – 🎛️ Полезные фильтры Jinja2
 
 ```yaml
 image_tag: "{{ docker_tag | default('latest') }}"
-when:      "{{ web_app_wipe | bool }}"            # '-e wipe=true' is a string!
+when:      "{{ web_app_wipe | bool }}"            # '-e wipe=true' — это строка!
 api_key:   "{{ lookup('env', 'API_KEY') | b64encode }}"
 ```
 
-| 🎛️ Filter | What it does |
+| 🎛️ Фильтр | Что он делает |
 |------------|--------------|
-| `default(x)` | Fallback when var is undefined |
-| `bool` | Coerce `"true"`/`"false"` strings |
-| `to_nice_yaml`, `to_json` | Render structured config |
-| `combine(dict2)` | Merge two dicts (group_vars + host_vars) |
-| `regex_replace(p, r)` | Inline sed |
+| `default(x)` | Запасное значение, когда переменная не определена |
+| `bool` | Приводит строки `"true"`/`"false"` к логическому типу |
+| `to_nice_yaml`, `to_json` | Рендерит структурированную конфигурацию |
+| `combine(dict2)` | Объединяет два словаря (group_vars + host_vars) |
+| `regex_replace(p, r)` | Встроенный sed |
 
-> 📚 Full filter list: `ansible-doc -t filter -l` (ships with ansible-core).
+> 📚 Полный список фильтров: `ansible-doc -t filter -l` (поставляется вместе с ansible-core).
 
 ---
 
-## 📍 Slide 13 – 🐳 Docker Compose via Ansible
+## 📍 Слайд 13 – 🐳 Docker Compose через Ansible
 
-Use `community.docker.docker_compose_v2` (Python `docker` SDK + the Compose plugin — **not** the deprecated `docker_compose` v1 module).
+Используйте `community.docker.docker_compose_v2` (Python-SDK `docker` + плагин Compose — **не** устаревший модуль `docker_compose` v1).
 
 ```yaml
 - name: Render compose file
@@ -253,22 +253,22 @@ Use `community.docker.docker_compose_v2` (Python `docker` SDK + the Compose plug
   community.docker.docker_compose_v2:
     project_src: "{{ compose_project_dir }}"
     state: present
-    pull: always              # always re-pull the tag
+    pull: always              # всегда перезабирать тег
     remove_orphans: true
   register: compose_result
 ```
 
-* 🔌 Install the collection: `ansible-galaxy collection install community.docker`
-* 🐍 Needs `python3-docker` on the **target** (not the controller)
-* ♻️ Idempotent — re-run shows `changed=0` if the rendered file is identical
+* 🔌 Установите коллекцию: `ansible-galaxy collection install community.docker`
+* 🐍 Требуется `python3-docker` на **целевом** узле (не на контроллере)
+* ♻️ Идемпотентно — повторный запуск показывает `changed=0`, если отрендеренный файл идентичен
 
-> 🔗 **Lab 6 §2.5** walks the whole thing end to end.
+> 🔗 **Лабораторная 6 §2.5** проводит через всё это от начала до конца.
 
 ---
 
-## 📍 Slide 14 – 🔗 Role Dependencies (`meta/main.yml`)
+## 📍 Слайд 14 – 🔗 Зависимости ролей (`meta/main.yml`)
 
-A role can declare what must run first. Lecture 5 covered role layout; we now exploit `meta/main.yml`.
+Роль может объявить, что должно выполниться первым. Лекция 5 описывала структуру ролей; теперь мы используем `meta/main.yml`.
 
 ```yaml
 # roles/web_app/meta/main.yml
@@ -286,17 +286,17 @@ flowchart LR
   Docker -->|runs first| WebApp
 ```
 
-* ✅ `ansible-playbook deploy.yml` with `roles: [web_app]` now also runs `docker`
-* ⚠️ Deps run **once per play**, not per role import — keep them lean
-* 🚫 Don't chain three layers deep; you lose execution-order intuition fast
+* ✅ `ansible-playbook deploy.yml` с `roles: [web_app]` теперь также запускает `docker`
+* ⚠️ Зависимости выполняются **раз на play**, а не на каждый импорт роли — держите их лёгкими
+* 🚫 Не выстраивайте цепочку в три уровня глубиной; вы быстро теряете интуицию о порядке выполнения
 
 ---
 
-## 📍 Slide 15 – 🧹 Wipe Logic: Why and How
+## 📍 Слайд 15 – 🧹 Логика очистки: зачем и как
 
-**Why:** clean reinstall is sometimes the only safe rollback (corrupted volume, broken cache, secrets rotated). You need a button — and you need it **gated**.
+**Зачем:** чистая переустановка иногда единственный безопасный откат (повреждённый том, сломанный кэш, ротированные секреты). Вам нужна кнопка — и нужна она **с защитой**.
 
-**Double-gate pattern** (Lab 6 §3):
+**Паттерн двойного шлюза** (лабораторная 6 §3):
 
 ```yaml
 # roles/web_app/tasks/wipe.yml
@@ -310,83 +310,83 @@ flowchart LR
       ansible.builtin.file:
         path: "{{ compose_project_dir }}"
         state: absent
-  when: web_app_wipe | bool   # gate 1: variable
-  tags: [web_app_wipe]        # gate 2: tag
+  when: web_app_wipe | bool   # шлюз 1: переменная
+  tags: [web_app_wipe]        # шлюз 2: тег
 ```
 
-| Invocation | Wipe? |
+| Вызов | Очистка? |
 |------------|-------|
-| `deploy.yml` | ❌ var false, tag not requested |
-| `deploy.yml --tags web_app_wipe` | ❌ `when` blocks it |
-| `deploy.yml -e web_app_wipe=true` | ✅ wipe **then** deploy (clean reinstall) |
-| `deploy.yml -e web_app_wipe=true --tags web_app_wipe` | ✅ wipe only |
+| `deploy.yml` | ❌ переменная false, тег не запрошен |
+| `deploy.yml --tags web_app_wipe` | ❌ `when` блокирует |
+| `deploy.yml -e web_app_wipe=true` | ✅ очистка, **затем** развёртывание (чистая переустановка) |
+| `deploy.yml -e web_app_wipe=true --tags web_app_wipe` | ✅ только очистка |
 
-> 🔥 **Why not the `never` tag alone?** A typo in `--tags` could still trigger it. Two independent gates = a typo can't destroy prod by itself.
+> 🔥 **Почему не только тег `never`?** Опечатка в `--tags` всё равно могла бы его запустить. Два независимых шлюза = опечатка сама по себе не уничтожит продакшен.
 
 ---
 
-## 📍 Slide 16 – 🌍 Multi-Environment Inventories
+## 📍 Слайд 16 – 🌍 Мультиокружные инвентари
 
-Same role, different **group_vars** per environment.
+Та же роль, другой **group_vars** для каждого окружения.
 
 ```
 ansible/inventories/
   dev/hosts.ini       group_vars/all.yml   → docker_tag: main
   staging/hosts.ini   group_vars/all.yml   → docker_tag: 1.2.3-rc1
-  prod/hosts.ini      group_vars/all.yml   → docker_tag: 1.2.2   # pinned
+  prod/hosts.ini      group_vars/all.yml   → docker_tag: 1.2.2   # закреплён
 ```
 
 ```bash
 ansible-playbook -i inventories/staging deploy.yml
-ansible-playbook -i inventories/prod    deploy.yml --check    # dry-run prod first
+ansible-playbook -i inventories/prod    deploy.yml --check    # сначала пробный прогон prod
 ```
 
-* 🎯 **Promote** the same artifact: dev → staging → prod uses identical roles + image
-* 🔐 Vault files **per env** so a leak in dev doesn't expose prod
-* 🚫 Don't branch the playbook on `inventory_hostname == 'prod'` — branch on vars
+* 🎯 **Продвигайте** один и тот же артефакт: dev → staging → prod используют идентичные роли + образ
+* 🔐 Файлы Vault **на каждое окружение**, чтобы утечка в dev не раскрыла prod
+* 🚫 Не ветвите playbook по `inventory_hostname == 'prod'` — ветвите по переменным
 
 ---
 
-## 📍 Slide 17 – 📦 Promoting an Image Through Envs
+## 📍 Слайд 17 – 📦 Продвижение образа через окружения
 
 ```mermaid
 flowchart LR
-  Build[🔨 CI build] -->|tag :sha-abc123| Registry[🌐 GHCR]
+  Build[🔨 Сборка CI] -->|тег :sha-abc123| Registry[🌐 GHCR]
   Registry --> Dev[🧪 dev]
   Registry --> Stg[🧪 staging]
   Registry --> Prod[🚀 prod]
 ```
 
-* 🏷️ **One immutable tag** (SHA or SemVer) flows through every env — never retag
-* 📌 Pin `docker_tag` per env in group_vars; bump it in a PR, not by SSH
+* 🏷️ **Один неизменяемый тег** (SHA или SemVer) проходит через каждое окружение — никогда не перетегируйте
+* 📌 Закрепляйте `docker_tag` для каждого окружения в group_vars; повышайте его в PR, а не по SSH
 
-> 🔥 **From Lecture 2:** "never deploy `:latest` to production." Lab 6 enforces that — `docker_tag` is required in `group_vars` and validated by `ansible-lint`.
+> 🔥 **Из лекции 2:** «никогда не развёртывайте `:latest` в продакшене». Лабораторная 6 это принуждает — `docker_tag` обязателен в `group_vars` и проверяется `ansible-lint`.
 
 ---
 
-## 📍 Slide 18 – 🤖 CI/CD Integration: The Big Picture
+## 📍 Слайд 18 – 🤖 Интеграция с CI/CD: общая картина
 
 ```mermaid
 flowchart LR
   Push[📤 git push main] --> Filter{📁 ansible/** ?}
   Filter -->|yes| Lint[🧹 ansible-lint]
-  Filter -->|no| Skip[⏭️ skip]
-  Lint --> Vault[🔐 Decrypt vault]
+  Filter -->|no| Skip[⏭️ пропуск]
+  Lint --> Vault[🔐 Расшифровать vault]
   Vault --> Run[🚀 ansible-playbook]
   Run --> Verify[✅ curl /health]
-  Verify -->|❌| Roll[🔙 rollback job]
+  Verify -->|❌| Roll[🔙 задача отката]
 ```
 
-* 🔄 Trigger: push to `main` **or** `workflow_dispatch` for manual deploys
-* 🧹 Lint first — failed YAML on prod is the dumbest outage
-* 🚀 Then deploy via `ansible-playbook` against the right inventory
-* ✅ Verify with HTTP probe before declaring success
+* 🔄 Триггер: push в `main` **или** `workflow_dispatch` для ручных развёртываний
+* 🧹 Сначала lint — сломанный YAML в продакшене это самый глупый простой
+* 🚀 Затем развёртывание через `ansible-playbook` против нужного инвентаря
+* ✅ Проверка HTTP-пробой перед объявлением успеха
 
-> 🔗 **Lab 6 §4** writes `.github/workflows/ansible-deploy.yml` from scratch.
+> 🔗 **Лабораторная 6 §4** пишет `.github/workflows/ansible-deploy.yml` с нуля.
 
 ---
 
-## 📍 Slide 19 – 🛠️ GitHub Actions Workflow Skeleton
+## 📍 Слайд 19 – 🛠️ Скелет workflow GitHub Actions
 
 ```yaml
 # .github/workflows/ansible-deploy.yml
@@ -423,89 +423,89 @@ jobs:
             ansible/playbooks/deploy.yml --vault-password-file /tmp/vault
 ```
 
-> 🔧 Pin `ansible-core==2.21.*` for the semester to match Lab 5/6 lockfiles. (Ansible-core has **no LTS label** — pin the exact minor that matches your collection lockfile.)
+> 🔧 Закрепите `ansible-core==2.21.*` на семестр, чтобы совпадать с lock-файлами лабораторных 5/6. (У Ansible-core **нет метки LTS** — закрепляйте точный минор, который совпадает с lock-файлом коллекций.)
 
 ---
 
-## 📍 Slide 20 – 🔐 Secrets, OIDC, and Self-Hosted Runners
+## 📍 Слайд 20 – 🔐 Секреты, OIDC и self-hosted раннеры
 
-Three secret-handling tiers, weakest → strongest:
+Три уровня работы с секретами, от слабейшего к сильнейшему:
 
-| 🔐 Tier | Mechanism | Trade-off |
+| 🔐 Уровень | Механизм | Компромисс |
 |---------|-----------|-----------|
-| 🟡 Repo secret as env | `secrets.SSH_KEY` → `~/.ssh/id_ed25519` | Simple; never echo to logs |
-| 🟠 GitHub Environment | Per-env secrets + manual approval | Needed for prod; small ops overhead |
-| 🟢 **OIDC + cloud IAM** | Short-lived federated tokens | No long-lived keys at all — recommended |
+| 🟡 Секрет репозитория как env | `secrets.SSH_KEY` → `~/.ssh/id_ed25519` | Просто; никогда не выводите в логи |
+| 🟠 GitHub Environment | Секреты на окружение + ручное одобрение | Нужен для prod; небольшие операционные издержки |
+| 🟢 **OIDC + облачный IAM** | Кратковременные федеративные токены | Никаких долгоживущих ключей — рекомендуется |
 
 ```yaml
-# OIDC example: assume an AWS role with no static creds
+# Пример OIDC: принять роль AWS без статических учётных данных
 - uses: aws-actions/configure-aws-credentials@v4
   with:
     role-to-assume: arn:aws:iam::123:role/ansible-deploy
     aws-region: eu-central-1
 ```
 
-* 🖥️ **Self-hosted runner** on the target network = no SSH key in CI, faster runs
-* ⚠️ Self-hosted runners are **trust boundaries** — never run on PRs from forks
+* 🖥️ **Self-hosted раннер** в целевой сети = никакого SSH-ключа в CI, быстрее прогоны
+* ⚠️ Self-hosted раннеры — это **границы доверия** — никогда не запускайте их на PR из форков
 
-> 🔥 **Hot take:** in 2026, putting a long-lived SSH key in `secrets.SSH_KEY` is the new "password in source." Use OIDC where the target supports it.
+> 🔥 **Смелое утверждение:** в 2026 году долгоживущий SSH-ключ в `secrets.SSH_KEY` — это новый «пароль в исходниках». Используйте OIDC там, где целевая среда это поддерживает.
 
 ---
 
-## 📍 Slide 21 – 📁 Path Filters: Don't Burn CI Minutes
+## 📍 Слайд 21 – 📁 Фильтры путей: не сжигайте минуты CI
 
 ```yaml
 on:
   push:
     paths:
       - 'ansible/**'
-      - '!ansible/docs/**'                # exclude docs
+      - '!ansible/docs/**'                # исключить docs
       - '.github/workflows/ansible-deploy.yml'
   pull_request:
     paths: ['ansible/**']
 ```
 
-* ⚡ Doc-only PR → no deploy run, no minutes burned
-* 🎯 Path filter on the **workflow file itself** so editing it triggers a self-test
-* ❗ `paths-ignore` and `paths` are mutually exclusive; pick one
+* ⚡ PR только с документацией → нет прогона развёртывания, минуты не сжигаются
+* 🎯 Фильтр пути на **сам файл workflow**, чтобы его правка запускала самотест
+* ❗ `paths-ignore` и `paths` взаимоисключающи; выберите что-то одно
 
 ```mermaid
 flowchart LR
-  Push[📤 push] --> Check{📁 ansible/** changed?}
+  Push[📤 push] --> Check{📁 ansible/** изменился?}
   Check -->|yes| Run[🚀 workflow]
-  Check -->|no| Skip[⏭️ skipped]
+  Check -->|no| Skip[⏭️ пропущено]
 ```
 
-> 💰 GitHub bills minutes on private repos. A team of 20 with no path filters can burn 10× more CI than needed.
+> 💰 GitHub тарифицирует минуты в приватных репозиториях. Команда из 20 человек без фильтров путей может сжечь в 10 раза больше CI, чем нужно.
 
 ---
 
-## 📍 Slide 22 – 🚀 Deployment Strategies
+## 📍 Слайд 22 – 🚀 Стратегии развёртывания
 
-For N hosts, Ansible exposes a single magic knob: `serial:`.
+Для N хостов Ansible предоставляет одну волшебную ручку: `serial:`.
 
 ```yaml
 - name: Deploy web tier
   hosts: webservers
-  serial: "25%"          # 25% of hosts at a time
-  max_fail_percentage: 10  # abort if >10% of a batch fails
+  serial: "25%"          # 25% хостов за раз
+  max_fail_percentage: 10  # прервать, если упало >10% партии
   roles: [web_app]
 ```
 
-| 🚀 Strategy | `serial:` | When |
+| 🚀 Стратегия | `serial:` | Когда |
 |-------------|-----------|------|
-| 🔄 **Rolling** | `1` or `25%` | Zero-downtime; load balancer keeps draining hosts |
-| 🐤 **Canary** | `1` (first batch only, then pause) | Test on one host, observe, continue |
-| 💥 **All at once** | omit `serial:` | Dev/staging only — outage on prod |
-| 🔵 **Blue/green** | two inventories (`blue`, `green`) + LB cutover | Heavier setup, instant rollback |
+| 🔄 **Rolling** | `1` или `25%` | Без простоя; балансировщик продолжает выводить хосты из ротации |
+| 🐤 **Canary** | `1` (только первая партия, затем пауза) | Тест на одном хосте, наблюдение, продолжение |
+| 💥 **Всё сразу** | опустить `serial:` | Только dev/staging — простой в prod |
+| 🔵 **Blue/green** | два инвентаря (`blue`, `green`) + переключение LB | Тяжелее в настройке, мгновенный откат |
 
-> 📖 Ansible's strategy is **push-based**: the controller drives the cadence. K8s (Lab 9+) flips this to pull-based, but the patterns transfer.
+> 📖 Стратегия Ansible — **на основе push**: контроллер задаёт темп. K8s (лабораторная 9+) переворачивает это на pull, но паттерны переносятся.
 
 ---
 
-## 📍 Slide 23 – ✅ Verification + 🔙 Rollback
+## 📍 Слайд 23 – ✅ Проверка + 🔙 Откат
 
-A deploy isn't done when `ansible-playbook` exits 0 — it's done when **the app responds**.
+Развёртывание не завершено, когда `ansible-playbook` выходит с кодом 0 — оно завершено, когда **приложение отвечает**.
 
 ```yaml
 - name: Smoke test
@@ -526,71 +526,71 @@ A deploy isn't done when `ansible-playbook` exits 0 — it's done when **the app
   when: hc is failed
 ```
 
-**Rollback checklist:**
-* 🏷️ Previous immutable tag captured **before** deploy (`previous_tag` fact)
-* 💾 DB migrations are forward-compatible OR rolled back separately
-* 🔔 Alert fires on the verify failure so a human knows
+**Чек-лист отката:**
+* 🏷️ Предыдущий неизменяемый тег захвачен **до** развёртывания (факт `previous_tag`)
+* 💾 Миграции БД совместимы вперёд ИЛИ откатываются отдельно
+* 🔔 Срабатывает алерт на сбой проверки, чтобы человек знал
 
-> ⏱️ **DORA "failed deployment recovery time"**: elite < 1h, low > 1 month. Automated rollback is the gap.
-
----
-
-## 📍 Slide 24 – 🌍 Real-World Patterns
-
-* 🎬 **Netflix Spinnaker** — versioned artifact per commit; automated canary analysis (open-sourced 2015)
-* 🏦 **Capital One** — Ansible for OS provisioning, container CD on top; one role catalog across AWS and on-prem
-* 📦 **Shopify** — 30+ deploys/day via "shipit" with per-stage approval gates
-* 🇺🇸 **Red Hat AAP** — Ansible Automation Platform as the standard CD layer for non-K8s workloads
-* 🚀 **GitLab Pages** — serial rollouts to hundreds of edge nodes from Ansible
-
-> 🔥 **Common thread:** small, automated, observable deploys. Big-bang quarterly releases are an artefact of a different era.
+> ⏱️ **DORA «время восстановления после неудачного развёртывания»**: у элитных < 1 ч, у отстающих > 1 месяца. Автоматический откат — вот этот разрыв.
 
 ---
 
-## 📍 Slide 25 – 🎯 Key Takeaways
+## 📍 Слайд 24 – 🌍 Паттерны из реального мира
 
-1. 🧱 **Blocks** group tasks and give you `rescue` + `always` — use them at every error boundary
-2. 🏷️ **Tags** are a strategy, not labels — three axes (component, action, risk) keep them maintainable
-3. 📝 **Jinja2 templates** turn one role into N apps via `group_vars` / `vars_files`
-4. 🐳 `community.docker.docker_compose_v2` is the only Compose module to use in 2026
-5. 🧹 **Wipe logic is double-gated** — variable AND tag, never one or the other
-6. 🤖 **GitHub Actions + path filters** make Ansible push-button — lint, run, verify, rollback
-7. 🚀 `serial:` + `max_fail_percentage:` is your deployment-strategy knob
+* 🎬 **Netflix Spinnaker** — версионированный артефакт на каждый коммит; автоматический canary-анализ (открыт в 2015)
+* 🏦 **Capital One** — Ansible для провижининга ОС, контейнерный CD сверху; единый каталог ролей по AWS и on-prem
+* 📦 **Shopify** — 30+ развёртываний в день через «shipit» с шлюзами одобрения на каждом этапе
+* 🇺🇸 **Red Hat AAP** — Ansible Automation Platform как стандартный CD-слой для не-K8s нагрузок
+* 🚀 **GitLab Pages** — последовательные раскатки на сотни граничных узлов из Ansible
 
-> 💡 **A good deploy is small, automated, observable, and reversible.** Three out of four still hurts.
+> 🔥 **Общая нить:** маленькие, автоматизированные, наблюдаемые развёртывания. Крупные квартальные релизы «всё сразу» — артефакт другой эпохи.
 
 ---
 
-## 📍 Slide 26 – 🚀 What Comes Next
+## 📍 Слайд 25 – 🎯 Ключевые выводы
 
-**📚 Next lecture: *Loki Logging*** — you've shipped the app; now find out what it said.
+1. 🧱 **Блоки** группируют задачи и дают `rescue` + `always` — используйте их на каждой границе ошибок
+2. 🏷️ **Теги** — это стратегия, а не метки — три оси (компонент, действие, риск) держат их поддерживаемыми
+3. 📝 **Шаблоны Jinja2** превращают одну роль в N приложений через `group_vars` / `vars_files`
+4. 🐳 `community.docker.docker_compose_v2` — единственный модуль Compose, который стоит использовать в 2026
+5. 🧹 **Логика очистки с двойным шлюзом** — переменная И тег, никогда одно или другое
+6. 🤖 **GitHub Actions + фильтры путей** делают Ansible кнопочным — lint, запуск, проверка, откат
+7. 🚀 `serial:` + `max_fail_percentage:` — ваша ручка стратегии развёртывания
 
-* 📋 Why log aggregation matters once you have >1 host
-* 🛠️ Loki + Promtail + Grafana architecture
+> 💡 **Хорошее развёртывание — маленькое, автоматизированное, наблюдаемое и обратимое.** Три из четырёх всё ещё болят.
+
+---
+
+## 📍 Слайд 26 – 🚀 Что дальше
+
+**📚 Следующая лекция: *Логирование с Loki*** — вы выкатили приложение; теперь узнайте, что оно сказало.
+
+* 📋 Почему агрегация логов важна, когда у вас больше 1 хоста
+* 🛠️ Архитектура Loki + Promtail + Grafana
 * 🔍 LogQL: `{job="web_app"} |= "ERROR"`
-* 🧪 Lab 7 deploys the logging stack with the very Ansible patterns you just learned
+* 🧪 Лабораторная 7 развёртывает стек логирования теми самыми паттернами Ansible, которые вы только что изучили
 
 ```mermaid
 flowchart LR
-  Lab5[📚 Lab 5: Roles] --> Lab6[📚 Lab 6: CD]
-  Lab6 --> Lab7[📚 Lab 7: Loki]
-  Lab7 --> Lab8[📚 Lab 8: Prometheus]
+  Lab5[📚 Лаб. 5: роли] --> Lab6[📚 Лаб. 6: CD]
+  Lab6 --> Lab7[📚 Лаб. 7: Loki]
+  Lab7 --> Lab8[📚 Лаб. 8: Prometheus]
 ```
 
-**🔬 Lab 6 deliverables recap:** refactored `common` + `docker` roles with blocks/rescue/tags; `web_app` role with `docker-compose.yml.j2` + `community.docker.docker_compose_v2`; double-gated `web_app_wipe`; `.github/workflows/ansible-deploy.yml` running lint → deploy → verify.
+**🔬 Напоминание о результатах лабораторной 6:** отрефакторенные роли `common` + `docker` с блоками/rescue/тегами; роль `web_app` с `docker-compose.yml.j2` + `community.docker.docker_compose_v2`; `web_app_wipe` с двойным шлюзом; `.github/workflows/ansible-deploy.yml`, выполняющий lint → deploy → verify.
 
-**👋 See you in Lecture 7.**
+**👋 До встречи на лекции 7.**
 
 ---
 
-## 📚 Resources
+## 📚 Ресурсы
 
-* 📕 *Continuous Delivery* — Jez Humble, David Farley (2010) — the canonical text
-* 📕 *Ansible for DevOps* — Jeff Geerling (2024 edition; ansible-core has moved on to 2.21 but the patterns are unchanged)
+* 📕 *Continuous Delivery* — Jez Humble, David Farley (2010) — канонический текст
+* 📕 *Ansible for DevOps* — Jeff Geerling (издание 2024; ansible-core ушёл вперёд до 2.21, но паттерны не изменились)
 * 🌐 [Ansible Blocks](https://docs.ansible.com/ansible/latest/user_guide/playbooks_blocks.html)
 * 🌐 [Ansible Tags](https://docs.ansible.com/ansible/latest/user_guide/playbooks_tags.html)
 * 🌐 [`community.docker.docker_compose_v2`](https://docs.ansible.com/ansible/latest/collections/community/docker/docker_compose_v2_module.html)
-* 🌐 [GitHub Actions: `paths` filters](https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#using-filters)
-* 🌐 [GitHub OIDC for cloud deploys](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect)
+* 🌐 [GitHub Actions: фильтры `paths`](https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#using-filters)
+* 🌐 [GitHub OIDC для облачных развёртываний](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect)
 
-> 🎓 Post-lecture quiz feeds the weeks 4–6 leaderboard window.
+> 🎓 Квиз после лекции идёт в зачёт окна лидерборда недель 4–6.

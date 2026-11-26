@@ -1,212 +1,212 @@
-# Lab 7 — Observability & Logging with the Loki Stack
+# Лабораторная работа 7 — Наблюдаемость и логирование со стеком Loki
 
-![difficulty](https://img.shields.io/badge/difficulty-intermediate-yellow)
-![topic](https://img.shields.io/badge/topic-Logging%20%26%20Observability-blue)
-![points](https://img.shields.io/badge/points-10%2B2-orange)
-![tech](https://img.shields.io/badge/tech-Loki%20|%20Alloy%20|%20Grafana-informational)
+![сложность](https://img.shields.io/badge/difficulty-intermediate-yellow)
+![тема](https://img.shields.io/badge/topic-Logging%20%26%20Observability-blue)
+![баллы](https://img.shields.io/badge/points-10%2B2-orange)
+![технология](https://img.shields.io/badge/tech-Loki%20|%20Alloy%20|%20Grafana-informational)
 
-> **Goal:** stand up Loki + Grafana Alloy + Grafana with Docker Compose, ship your Lab 1 Python app's logs into it as structured JSON, and learn to ask questions of those logs with LogQL.
-> **Deliverable:** a PR from `lab07` adding `monitoring/` (compose stack + Alloy + Loki configs + dashboard JSON), the JSON-logging patch to `app_python/`, and `monitoring/docs/LAB07.md` with the evidence captures.
-
----
-
-## Overview
-
-In this lab you will practice:
-- Reading Alloy's River syntax and **wiring components by name** (`discovery.docker` → `discovery.relabel` → `loki.source.docker` → `loki.write`) instead of copy-pasting a YAML pipeline
-- Writing a Docker Compose stack from a service-list spec (which images, which ports, which volumes, which network)
-- Emitting structured JSON logs from a Python service
-- Writing **LogQL** stream selectors + line filters + parsers + metric functions to answer real questions about your own app
-- Hardening the stack: resource limits, retention compactor, health checks, no anonymous Grafana
-
-> ⚠️ **Scope:** single-binary Loki on the local Docker host. No object storage, no multi-tenancy, no TLS — those come back in the K8s-era labs (12, 16). Don't tune for production; tune for *understanding the wires*.
-
-> 🪦 **A note on Promtail.** Through 2025 the standard Loki agent was **Promtail**. It reached **End-of-Life on March 2, 2026** — no further releases, no security fixes. Its successor, **Grafana Alloy**, folds Promtail + the Prometheus agent + the OpenTelemetry Collector into one binary. This lab uses Alloy. You may still meet Promtail configs in brownfield systems, so the lecture slides 14–15 show the legacy syntax and how it maps to Alloy — but **do not stand up a new Promtail in 2026.** A Promtail `pipeline_stages` block does **not** translate 1:1 to Alloy; the equivalents are split across `loki.relabel` and `loki.process` and several stage names changed.
+> **Цель:** поднять Loki + Grafana Alloy + Grafana через Docker Compose, отгружать логи вашего Python-приложения из лабораторной 1 в виде структурированного JSON и научиться задавать вопросы к этим логам через LogQL.
+> **Результат сдачи:** PR из ветки `lab07`, добавляющий `monitoring/` (стек compose + конфиги Alloy + Loki + JSON дашборда), патч JSON-логирования в `app_python/` и `monitoring/docs/LAB07.md` с захватами доказательств.
 
 ---
 
-## Project State
+## Обзор
 
-**You should have from previous labs:**
-- `app_python/` from Lab 1 — Flask/FastAPI service with `/` and `/health`
-- A working Docker image of it from Lab 2 (registry-pushed or local tag)
-- Comfort with Docker Compose v2 from Lab 6 (Jinja2-templated stack)
+В этой лабораторной работе вы отработаете:
+- Чтение синтаксиса River в Alloy и **связывание компонентов по имени** (`discovery.docker` → `discovery.relabel` → `loki.source.docker` → `loki.write`) вместо копипаста YAML-конвейера
+- Написание стека Docker Compose по спецификации списка сервисов (какие образы, какие порты, какие тома, какая сеть)
+- Эмиссию структурированных JSON-логов из Python-сервиса
+- Написание **LogQL**: селекторы потоков + строчные фильтры + парсеры + функции метрик, чтобы отвечать на реальные вопросы о вашем собственном приложении
+- Укрепление стека: лимиты ресурсов, компактор ретенции, проверки состояния (health check), никакой анонимной Grafana
 
-**This lab adds:**
-- `monitoring/docker-compose.yml` — the Loki + Alloy + Grafana stack
-- `monitoring/loki/config.yml` — provided plumbing
-- `monitoring/alloy/config.alloy` — **YOU write the River pipeline**
-- `monitoring/grafana/dashboards/lab07.json` — your exported 4-panel dashboard
-- `monitoring/docs/LAB07.md` — submission report
-- A JSON-logging upgrade to `app_python/app.py`
+> ⚠️ **Область:** single-binary Loki на локальном Docker-хосте. Без объектного хранилища, без мультитенантности, без TLS — они вернутся в эпоху лабораторных по K8s (12, 16). Не тюньте под прод; тюньте под *понимание связей*.
 
-By Lab 16 you'll redeploy this same idea on Kubernetes as `kube-prometheus-stack` + a Loki Helm chart. The pieces you learn this week (label cardinality, LogQL, ConfigMap-mounted configs) all carry forward.
+> 🪦 **Замечание о Promtail.** На протяжении 2025 года стандартным агентом Loki был **Promtail**. Он достиг **End-of-Life 2 марта 2026 года** — больше нет релизов, нет исправлений безопасности. Его преемник, **Grafana Alloy**, объединяет Promtail + агент Prometheus + OpenTelemetry Collector в один бинарник. Эта лабораторная использует Alloy. Вы можете всё ещё встретить конфиги Promtail в унаследованных системах, поэтому слайды 14–15 лекции показывают устаревший синтаксис и то, как он отображается на Alloy — но **не поднимайте новый Promtail в 2026 году.** Блок `pipeline_stages` Promtail **не** переносится 1:1 в Alloy; эквиваленты разделены между `loki.relabel` и `loki.process`, и несколько имён стадий изменились.
 
 ---
 
-## Setup
+## Состояние проекта
 
-Versions used in this lab — pin these in your compose file:
+**У вас должно быть из предыдущих лабораторных работ:**
+- `app_python/` из лабораторной 1 — сервис Flask/FastAPI с `/` и `/health`
+- Рабочий Docker-образ из него из лабораторной 2 (запушенный в реестр или локальный тег)
+- Уверенное владение Docker Compose v2 из лабораторной 6 (стек, шаблонизированный Jinja2)
 
-| Component | Tag | Released |
+**Эта лабораторная работа добавляет:**
+- `monitoring/docker-compose.yml` — стек Loki + Alloy + Grafana
+- `monitoring/loki/config.yml` — предоставленная обвязка
+- `monitoring/alloy/config.alloy` — **конвейер River пишете ВЫ**
+- `monitoring/grafana/dashboards/lab07.json` — ваш экспортированный дашборд из 4 панелей
+- `monitoring/docs/LAB07.md` — отчёт о сдаче
+- Обновление JSON-логирования в `app_python/app.py`
+
+К лабораторной 16 вы развернёте ту же идею в Kubernetes как `kube-prometheus-stack` + Helm-чарт Loki. Части, которые вы узнаете на этой неделе (кардинальность меток, LogQL, конфиги, монтируемые из ConfigMap), все переносятся дальше.
+
+---
+
+## Настройка
+
+Версии, используемые в этой лабораторной — зафиксируйте их в вашем compose-файле:
+
+| Компонент | Тег | Выпущено |
 |---|---|---|
-| `grafana/loki` | `3.7.0` | Mar 2026 |
-| `grafana/alloy` | `v1.16.1` | May 6 2026 |
-| `grafana/grafana` | `13.0.1` | May 12 2026 |
+| `grafana/loki` | `3.7.0` | март 2026 |
+| `grafana/alloy` | `v1.16.1` | 6 мая 2026 |
+| `grafana/grafana` | `13.0.1` | 12 мая 2026 |
 
 ```bash
-docker --version           # 28.x or 29.x
-docker compose version     # v2.x — note the space, not a hyphen
-curl --version             # for the verification commands below
+docker --version           # 28.x или 29.x
+docker compose version     # v2.x — обратите внимание на пробел, а не дефис
+curl --version             # для команд проверки ниже
 ```
 
-Create the directory layout (you'll fill the files yourself):
+Создайте структуру каталогов (файлы вы заполните сами):
 
 ```
 monitoring/
-├── docker-compose.yml             # YOU write this (§1.4)
+├── docker-compose.yml             # пишете ВЫ (§1.4)
 ├── loki/
-│   └── config.yml                 # provided plumbing — copy from labs/lab07/loki/
+│   └── config.yml                 # предоставленная обвязка — скопируйте из labs/lab07/loki/
 ├── alloy/
-│   └── config.alloy               # YOU write this (§1.3)
+│   └── config.alloy               # пишете ВЫ (§1.3)
 ├── grafana/
 │   └── dashboards/
-│       └── lab07.json             # exported from Grafana UI in Task 3
+│       └── lab07.json             # экспортируется из UI Grafana в задаче 3
 └── docs/
-    └── LAB07.md                   # your submission report
+    └── LAB07.md                   # ваш отчёт о сдаче
 ```
 
-Course-repo plumbing for this lab:
-- `labs/lab07/loki/config.yml` — drop-in Loki config (see §1.2)
-- `plumbing/echo/` — optional second log source (see §2.2)
+Обвязка из репозитория курса для этой лабораторной:
+- `labs/lab07/loki/config.yml` — готовый конфиг Loki (см. §1.2)
+- `plumbing/echo/` — опциональный второй источник логов (см. §2.2)
 
 ---
 
-## Task 1 — Deploy the Loki + Alloy + Grafana stack (3 pts)
+## Задача 1 — Разверните стек Loki + Alloy + Grafana (3 балла)
 
-### 1.1 — Read first, write second
+### 1.1 — Сначала читаем, потом пишем
 
-Read these before you touch a config (they answer the questions the YOUR-TASK blocks ask of you):
-- [Loki overview](https://grafana.com/docs/loki/latest/get-started/overview/) — distributor / ingester / querier; chunks vs index
-- [Alloy components](https://grafana.com/docs/alloy/latest/) — `discovery.*`, `loki.source.*`, `loki.write`, how they reference each other by name
-- [LogQL intro](https://grafana.com/docs/loki/latest/query/) — selectors, filters, parsers, metric queries
+Прочитайте это, прежде чем трогать конфиг (это отвечает на вопросы, которые задают вам блоки ВАША ЗАДАЧА):
+- [Loki overview](https://grafana.com/docs/loki/latest/get-started/overview/) — distributor / ingester / querier; чанки против индекса
+- [Alloy components](https://grafana.com/docs/alloy/latest/) — `discovery.*`, `loki.source.*`, `loki.write`, как они ссылаются друг на друга по имени
+- [LogQL intro](https://grafana.com/docs/loki/latest/query/) — селекторы, фильтры, парсеры, запросы метрик
 
-`YOUR TASK`: in `docs/LAB07.md`, answer these three questions in 2–4 sentences each. You'll come back and revise as you build:
+`ВАША ЗАДАЧА`: в `docs/LAB07.md` ответьте на эти три вопроса по 2–4 предложения каждый. Вы вернётесь и пересмотрите их по мере сборки:
 
-1. How does Loki's **label** index differ from Elasticsearch's full-text index, and why is that cheaper at 100 GB/day?
-2. What is a **stream** in Loki, and what happens to memory if you make `user_id` a label on a service with 10 M users?
-3. Alloy components reference each other by **name** (e.g. `loki.write.default.receiver`). What's the export name, and why is it different from the block name (`loki.write "default"`)?
+1. Чем **индекс меток** Loki отличается от полнотекстового индекса Elasticsearch и почему это дешевле при 100 ГБ/день?
+2. Что такое **поток (stream)** в Loki и что произойдёт с памятью, если сделать `user_id` меткой на сервисе с 10 млн пользователей?
+3. Компоненты Alloy ссылаются друг на друга по **имени** (например, `loki.write.default.receiver`). Что такое имя экспорта и почему оно отличается от имени блока (`loki.write "default"`)?
 
-### 1.2 — Loki config (provided plumbing — do not rewrite)
+### 1.2 — Конфиг Loki (предоставленная обвязка — не переписывайте)
 
-The Loki config is the **one** fully-written file in this lab; it lives in the course repo as plumbing. Copy it into your stack:
+Конфиг Loki — **единственный** полностью написанный файл в этой лабораторной; он лежит в репозитории курса как обвязка. Скопируйте его в ваш стек:
 
 ```bash
 cp labs/lab07/loki/config.yml monitoring/loki/config.yml
 ```
 
-You don't write it — but you **must** be able to explain in your docs:
-- Why `store: tsdb` + `schema: v13` (and what it replaced)
-- Why `object_store: filesystem` is wrong for production
-- Why the `compactor` block is non-negotiable when `retention_period` is set
+Вы его не пишете — но вы **должны** уметь объяснить в документации:
+- Почему `store: tsdb` + `schema: v13` (и что это заменило)
+- Почему `object_store: filesystem` неверен для прода
+- Почему блок `compactor` не обсуждается, когда задан `retention_period`
 
-> ⚠️ **Gotcha to internalise:** `retention_period` with no `compactor` block = logs never delete. Loki swallows the limit silently. This is the #1 reason teams blow past their disk budget. Reference this in your docs §3 ("Configuration choices").
+> ⚠️ **Ловушка, которую нужно усвоить:** `retention_period` без блока `compactor` = логи никогда не удаляются. Loki молча проглатывает лимит. Это причина №1, по которой команды выходят за рамки бюджетного диска. Сошлитесь на это в вашей документации §3 («Выбор конфигурации»).
 
-### 1.3 — Alloy River config (YOUR TASK)
+### 1.3 — Конфиг River в Alloy (ВАША ЗАДАЧА)
 
-**File:** `monitoring/alloy/config.alloy`
+**Файл:** `monitoring/alloy/config.alloy`
 
-Alloy is wired components, not a YAML pipeline. Four blocks, each feeding the next. The block names below are non-negotiable — but the arguments, labels, and references between them are the skill.
+Alloy — это связанные компоненты, а не YAML-конвейер. Четыре блока, каждый питает следующий. Имена блоков ниже не обсуждаются — но аргументы, метки и ссылки между ними — это и есть навык.
 
-`YOUR TASK`: fill the blanks. The block names tell you the role each block plays; the comments tell you the contract.
+`ВАША ЗАДАЧА`: заполните пропуски. Имена блоков говорят вам, какую роль играет каждый блок; комментарии говорят вам о контракте.
 
 ```alloy
-// 1) Discover Docker containers via the daemon socket
+// 1) Обнаружить Docker-контейнеры через сокет демона
 discovery.docker "containers" {
-  host             = ___           // YOUR TASK: docker socket URL
+  host             = ___           // ВАША ЗАДАЧА: URL docker-сокета
   refresh_interval = "5s"
-  ___                              // YOUR TASK: add a `filter { ... }` block — only
-                                   //   scrape containers labelled `logging=alloy`
+  ___                              // ВАША ЗАДАЧА: добавьте блок `filter { ... }` — скрейпить
+                                   //   только контейнеры с меткой `logging=alloy`
 }
 
-// 2) Promote useful Docker metadata to Loki labels — keep cardinality LOW
+// 2) Продвинуть полезные метаданные Docker в метки Loki — держите кардинальность НИЗКОЙ
 discovery.relabel "containers" {
-  targets = ___                    // YOUR TASK: previous block's exported targets
+  targets = ___                    // ВАША ЗАДАЧА: экспортированные targets предыдущего блока
   rule {
-    source_labels = [___]          // YOUR TASK: Docker meta-label for container name
-    regex         = ___            // YOUR TASK: strip the leading "/"
+    source_labels = [___]          // ВАША ЗАДАЧА: мета-метка Docker для имени контейнера
+    regex         = ___            // ВАША ЗАДАЧА: отрезать ведущий "/"
     target_label  = "container"
   }
-  ___                              // YOUR TASK: second `rule { ... }` — copy Docker
-                                   //   label `app` into Loki label `app`
+  ___                              // ВАША ЗАДАЧА: второе правило `rule { ... }` — скопировать метку
+                                   //   Docker `app` в метку Loki `app`
 }
 
-// 3) Tail the discovered containers' log streams
+// 3) Следить за потоками логов обнаруженных контейнеров
 loki.source.docker "default" {
-  host       = ___                 // YOUR TASK: same socket as block 1
-  targets    = ___                 // YOUR TASK: feed from the *relabel* block
-  forward_to = [___]               // YOUR TASK: which loki.write receiver?
+  host       = ___                 // ВАША ЗАДАЧА: тот же сокет, что в блоке 1
+  targets    = ___                 // ВАША ЗАДАЧА: питаться из блока *relabel*
+  forward_to = [___]               // ВАША ЗАДАЧА: какой receiver у loki.write?
 }
 
-// 4) Ship everything to Loki
+// 4) Отгрузить всё в Loki
 loki.write "default" {
   endpoint {
-    url = ___                      // YOUR TASK: Loki push URL — which host, port, path?
+    url = ___                      // ВАША ЗАДАЧА: URL push в Loki — какой хост, порт, путь?
   }
 }
 ```
 
-Notes on each block (don't skip these — they're the *why* behind the blanks):
+Замечания по каждому блоку (не пропускайте их — это *почему* за пропусками):
 
-- **Block 1** — `filter` is how you make logging opt-in. Without it, Alloy ships every container's stdout, including its own and Loki's, polluting your dashboards.
-- **Block 2** — `discovery.relabel` rewrites label metadata before logs are scraped. The first rule normalises the container name (Docker prefixes it with `/`); the second copies a user-defined Docker label into a Loki label. **Stop and think about cardinality** before adding any third rule — anything with more than ~50 distinct values doesn't belong here.
-- **Block 3** — `loki.source.docker` tails container stdout/stderr. Its `targets` should come from the **relabel** output (not the raw discovery), otherwise your labels never make it into Loki.
-- **Block 4** — `loki.write` is the only block that talks HTTP. Its endpoint URL determines whether your stack is portable across networks; use the compose service name, not `localhost`.
+- **Блок 1** — `filter` — так вы делаете логирование opt-in. Без него Alloy отгружает stdout каждого контейнера, включая свой собственный и Loki, загрязняя ваши дашборды.
+- **Блок 2** — `discovery.relabel` переписывает метаданные меток до скрейпинга логов. Первое правило нормализует имя контейнера (Docker добавляет к нему префикс `/`); второе копирует пользовательскую метку Docker в метку Loki. **Остановитесь и подумайте о кардинальности**, прежде чем добавлять какое-либо третье правило — всё, что имеет более ~50 различных значений, здесь не место.
+- **Блок 3** — `loki.source.docker` следит за stdout/stderr контейнеров. Его `targets` должны приходить из вывода **relabel** (а не из сырого discovery), иначе ваши метки никогда не попадут в Loki.
+- **Блок 4** — `loki.write` — единственный блок, который говорит по HTTP. URL его эндпоинта определяет, переносим ли ваш стек между сетями; используйте имя сервиса compose, а не `localhost`.
 
 <details>
-<summary>💡 River-syntax hints</summary>
+<summary>💡 Подсказки по синтаксису River</summary>
 
-- A block is `<kind>.<subkind> "label" { … }`. The **label** in quotes (e.g. `"containers"`, `"default"`) is how other blocks refer to it.
-- Each component has documented **exports**. `discovery.docker` exports `.targets`. `discovery.relabel` exports `.output`. `loki.write` exports `.receiver`. You wire blocks by writing the fully-qualified export — e.g. `discovery.relabel.containers.output`.
-- Alloy serves a live UI on port **12345** showing the component graph. If a wire is broken, you'll see it red in the UI before you'll see it in Loki.
-- Reference pages: [`discovery.docker`](https://grafana.com/docs/alloy/latest/reference/components/discovery/discovery.docker/), [`discovery.relabel`](https://grafana.com/docs/alloy/latest/reference/components/discovery/discovery.relabel/), [`loki.source.docker`](https://grafana.com/docs/alloy/latest/reference/components/loki/loki.source.docker/), [`loki.write`](https://grafana.com/docs/alloy/latest/reference/components/loki/loki.write/).
-- The Loki push endpoint path is documented [here](https://grafana.com/docs/loki/latest/reference/loki-http-api/#ingest-logs).
+- Блок — это `<kind>.<subkind> "label" { … }`. **Метка** в кавычках (например, `"containers"`, `"default"`) — так другие блоки на него ссылаются.
+- У каждого компонента есть документированные **экспорты**. `discovery.docker` экспортирует `.targets`. `discovery.relabel` экспортирует `.output`. `loki.write` экспортирует `.receiver`. Вы связываете блоки, записывая полное имя экспорта — например, `discovery.relabel.containers.output`.
+- Alloy обслуживает живой UI на порту **12345**, показывающий граф компонентов. Если связь сломана, вы увидите её красной в UI раньше, чем в Loki.
+- Справочные страницы: [`discovery.docker`](https://grafana.com/docs/alloy/latest/reference/components/discovery/discovery.docker/), [`discovery.relabel`](https://grafana.com/docs/alloy/latest/reference/components/discovery/discovery.relabel/), [`loki.source.docker`](https://grafana.com/docs/alloy/latest/reference/components/loki/loki.source.docker/), [`loki.write`](https://grafana.com/docs/alloy/latest/reference/components/loki/loki.write/).
+- Путь push-эндпоинта Loki документирован [здесь](https://grafana.com/docs/loki/latest/reference/loki-http-api/#ingest-logs).
 
 </details>
 
-### 1.4 — Docker Compose stack (YOUR TASK)
+### 1.4 — Стек Docker Compose (ВАША ЗАДАЧА)
 
-**File:** `monitoring/docker-compose.yml`
+**Файл:** `monitoring/docker-compose.yml`
 
-The stack has **four** services. The image tags + ports are given (so versions are pinned); the volumes, network membership, env vars, and `depends_on` are your job — those are the wires that make it actually work.
+В стеке **четыре** сервиса. Теги образов + порты даны (чтобы версии были зафиксированы); тома, членство в сети, переменные окружения и `depends_on` — ваша работа — это связи, которые заставляют всё действительно работать.
 
-| Service | Image | Published ports | Why it's there |
+| Сервис | Образ | Публикуемые порты | Зачем он здесь |
 |---|---|---|---|
-| `loki` | `grafana/loki:3.7.0` | `3100:3100` | Storage + query engine |
-| `alloy` | `grafana/alloy:v1.16.1` | `12345:12345` (live UI) | Collector — reads docker.sock, pushes to Loki |
-| `grafana` | `grafana/grafana:13.0.1` | `3000:3000` | Dashboards + Explore UI |
-| `app` | your Lab 2 image | `8080:8080` | Source of logs — Lab 1 service with JSON output (Task 2) |
+| `loki` | `grafana/loki:3.7.0` | `3100:3100` | Хранилище + движок запросов |
+| `alloy` | `grafana/alloy:v1.16.1` | `12345:12345` (живой UI) | Коллектор — читает docker.sock, пушит в Loki |
+| `grafana` | `grafana/grafana:13.0.1` | `3000:3000` | Дашборды + UI Explore |
+| `app` | ваш образ из лабораторной 2 | `8080:8080` | Источник логов — сервис из лабораторной 1 с JSON-выводом (задача 2) |
 
-`YOUR TASK`: write the compose file. Specifically you must figure out:
+`ВАША ЗАДАЧА`: напишите compose-файл. В частности, вы должны разобраться:
 
-1. **Volumes for `loki`:** one bind mount makes the config file from §1.2 visible inside the container at `/etc/loki/config.yml`; one named volume persists `/loki` so chunks survive a restart. The container's command should be `-config.file=/etc/loki/config.yml`.
-2. **Volumes for `alloy`:** one bind mount for the config from §1.3 (mounted **read-only**); one **read-only** mount of the host Docker socket so Alloy can discover and tail containers. Alloy's command needs three flags: `run`, `--server.http.listen-addr=0.0.0.0:12345`, `--storage.path=/var/lib/alloy/data`, then the config path.
-3. **Env vars for `grafana`:** for this task only, enable anonymous admin access (`GF_AUTH_ANONYMOUS_ENABLED`, `GF_AUTH_ANONYMOUS_ORG_ROLE`). **You will turn this off in Task 4** — leave a comment now so you remember. Persist `/var/lib/grafana` in a named volume so your dashboard from Task 3 survives `docker compose down`.
-4. **Labels on `app`:** the container must carry `logging: "alloy"` (opts into Alloy collection because of your `filter` in §1.3) and `app: "devops-python"` (becomes a Loki label via your relabel rule in §1.3). Without **both** of those labels, your dashboards in Task 3 will be empty.
-5. **Network:** define a user-defined bridge network (call it `logging`) and put **all four** services on it so they resolve each other by service name. `loki` and `grafana` must wait for their dependencies before starting (`depends_on:`).
+1. **Тома для `loki`:** один bind mount делает конфиг-файл из §1.2 видимым внутри контейнера по пути `/etc/loki/config.yml`; один именованный том сохраняет `/loki`, чтобы чанки переживали перезапуск. Команда контейнера должна быть `-config.file=/etc/loki/config.yml`.
+2. **Тома для `alloy`:** один bind mount для конфига из §1.3 (монтируется **только для чтения**); один **read-only** mount Docker-сокета хоста, чтобы Alloy мог обнаруживать и следить за контейнерами. Команде Alloy нужны три флага: `run`, `--server.http.listen-addr=0.0.0.0:12345`, `--storage.path=/var/lib/alloy/data`, затем путь к конфигу.
+3. **Переменные окружения для `grafana`:** только для этой задачи включите анонимный admin-доступ (`GF_AUTH_ANONYMOUS_ENABLED`, `GF_AUTH_ANONYMOUS_ORG_ROLE`). **В задаче 4 вы это отключите** — оставьте комментарий сейчас, чтобы не забыть. Сохраняйте `/var/lib/grafana` в именованном томе, чтобы ваш дашборд из задачи 3 пережил `docker compose down`.
+4. **Метки на `app`:** контейнер должен нести `logging: "alloy"` (включает сбор Alloy благодаря вашему `filter` в §1.3) и `app: "devops-python"` (становится меткой Loki через ваше правило relabel в §1.3). Без **обеих** этих меток ваши дашборды в задаче 3 будут пустыми.
+5. **Сеть:** определите пользовательскую bridge-сеть (назовите её `logging`) и поместите **все четыре** сервиса в неё, чтобы они разрешали друг друга по имени сервиса. `loki` и `grafana` должны ждать свои зависимости перед стартом (`depends_on:`).
 
 ```yaml
-# monitoring/docker-compose.yml — YOUR TASK
+# monitoring/docker-compose.yml — ВАША ЗАДАЧА
 services:
   loki:
     image: grafana/loki:3.7.0
-    command: ___                              # YOUR TASK: -config.file=/etc/loki/config.yml
+    command: ___                              # ВАША ЗАДАЧА: -config.file=/etc/loki/config.yml
     ports:
       - "3100:3100"
     volumes:
-      - ___                                   # YOUR TASK: bind-mount loki/config.yml
-      - ___                                   # YOUR TASK: named volume for /loki
-    networks: [___]                           # YOUR TASK
+      - ___                                   # ВАША ЗАДАЧА: bind-mount loki/config.yml
+      - ___                                   # ВАША ЗАДАЧА: именованный том для /loki
+    networks: [___]                           # ВАША ЗАДАЧА
 
   alloy:
     image: grafana/alloy:v1.16.1
@@ -214,48 +214,48 @@ services:
       - run
       - --server.http.listen-addr=0.0.0.0:12345
       - --storage.path=/var/lib/alloy/data
-      - ___                                   # YOUR TASK: path to mounted config.alloy
+      - ___                                   # ВАША ЗАДАЧА: путь к смонтированному config.alloy
     ports:
       - "12345:12345"
     volumes:
-      - ___                                   # YOUR TASK: bind-mount config.alloy :ro
-      - ___                                   # YOUR TASK: bind-mount the Docker socket :ro
-    networks: [___]                           # YOUR TASK: same network as loki
-    depends_on: [___]                         # YOUR TASK: must start after which service?
+      - ___                                   # ВАША ЗАДАЧА: bind-mount config.alloy :ro
+      - ___                                   # ВАША ЗАДАЧА: bind-mount Docker-сокета :ro
+    networks: [___]                           # ВАША ЗАДАЧА: та же сеть, что у loki
+    depends_on: [___]                         # ВАША ЗАДАЧА: после какого сервиса должен стартовать?
 
   grafana:
     image: grafana/grafana:13.0.1
     ports:
       - "3000:3000"
     environment:
-      - ___                                   # YOUR TASK: enable anonymous access (DEV ONLY — Task 4 turns this off)
-      - ___                                   # YOUR TASK: anonymous role = Admin
+      - ___                                   # ВАША ЗАДАЧА: включить анонимный доступ (ТОЛЬКО DEV — задача 4 это отключает)
+      - ___                                   # ВАША ЗАДАЧА: анонимная роль = Admin
     volumes:
-      - ___                                   # YOUR TASK: persist /var/lib/grafana
-    networks: [___]                           # YOUR TASK
-    depends_on: [___]                         # YOUR TASK
+      - ___                                   # ВАША ЗАДАЧА: сохранить /var/lib/grafana
+    networks: [___]                           # ВАША ЗАДАЧА
+    depends_on: [___]                         # ВАША ЗАДАЧА
 
   app:
-    image: ___                                # YOUR TASK: your Lab 2 image (or `build:` block)
+    image: ___                                # ВАША ЗАДАЧА: ваш образ из лабораторной 2 (или блок `build:`)
     ports:
       - "8080:8080"
     labels:
-      ___: ___                                # YOUR TASK: opt into Alloy collection
-      ___: ___                                # YOUR TASK: the `app` Loki label (matches §1.3 rule)
-    networks: [___]                           # YOUR TASK
+      ___: ___                                # ВАША ЗАДАЧА: включить сбор Alloy
+      ___: ___                                # ВАША ЗАДАЧА: метка Loki `app` (совпадает с правилом §1.3)
+    networks: [___]                           # ВАША ЗАДАЧА
 
 volumes:
-  ___:                                        # YOUR TASK: declare named volume for loki
-  ___:                                        # YOUR TASK: declare named volume for grafana
+  ___:                                        # ВАША ЗАДАЧА: объявить именованный том для loki
+  ___:                                        # ВАША ЗАДАЧА: объявить именованный том для grafana
 
 networks:
-  ___:                                        # YOUR TASK: declare the user-defined bridge
+  ___:                                        # ВАША ЗАДАЧА: объявить пользовательскую bridge-сеть
     name: logging
 ```
 
-> ⚠️ **Security note:** mounting `/var/run/docker.sock` gives Alloy a **powerful** view of the host — effectively root on the daemon. Fine for this lab; in production you'd use a socket proxy (Tecnativa's `docker-socket-proxy`) or file-based discovery. Note this trade-off in your docs.
+> ⚠️ **Замечание о безопасности:** монтирование `/var/run/docker.sock` даёт Alloy **мощный** обзор хоста — фактически root на демоне. Нормально для этой лабораторной; в проде вы бы использовали сокет-прокси (`docker-socket-proxy` от Tecnativa) или файловый discovery. Отметьте этот компромисс в документации.
 
-### 1.5 — Bring it up and verify
+### 1.5 — Поднимите и проверьте
 
 ```bash
 cd monitoring
@@ -263,310 +263,310 @@ docker compose up -d
 docker compose ps
 ```
 
-Verify:
+Проверьте:
 
 ```bash
-# Loki — ingester takes ~15s after process start to report ready.
-# If you see "Ingester not ready" the first time, wait and retry; do NOT debug.
-curl -s http://localhost:3100/ready          # expect: "ready"
+# Loki — ingester тратит ~15с после старта процесса, чтобы сообщить о готовности.
+# Если вы видите "Ingester not ready" в первый раз, подождите и повторите; НЕ отлаживайте.
+curl -s http://localhost:3100/ready          # ожидается: "ready"
 
-# Loki's view of discovered labels — once Alloy is wired correctly, you should
-# see at LEAST "container" and (after §2.2) "app" in the list:
+# Взгляд Loki на обнаруженные метки — когда Alloy связан правильно, вы должны
+# видеть КАК МИНИМУМ "container" и (после §2.2) "app" в списке:
 curl -s http://localhost:3100/loki/api/v1/labels | jq -c .data
-# (illustrative — your set will differ)
+# (иллюстративно — ваш набор будет отличаться)
 # ["container","service_name"]
 
-# Alloy live component graph — open in your browser
+# Живой граф компонентов Alloy — откройте в браузере
 #   macOS:  open http://localhost:12345
-#   Linux:  xdg-open http://localhost:12345   (or just paste the URL)
+#   Linux:  xdg-open http://localhost:12345   (или просто вставьте URL)
 
-# Grafana — open in your browser at http://localhost:3000
-# Add data source: Connections → Data sources → Loki → URL http://loki:3100 → Save & Test
+# Grafana — откройте в браузере по адресу http://localhost:3000
+# Добавьте источник данных: Connections → Data sources → Loki → URL http://loki:3100 → Save & Test
 ```
 
-### 1.6 — Proof of work
+### 1.6 — Доказательство работы
 
-**Paste into `docs/LAB07.md`:**
+**Вставьте в `docs/LAB07.md`:**
 
-- `docker compose ps` output showing all four services `Up` (after Task 4, loki + grafana must additionally report `(healthy)`; alloy + app are not required to define healthchecks)
-- `curl -s http://localhost:3100/ready` output — literally the word `ready`
-- `curl -s http://localhost:3100/loki/api/v1/labels | jq -c .data` — must include `container` (and `app` after §2.2)
-- Screenshot of the Alloy live UI at `:12345` showing the four blocks wired with no red edges
-- Screenshot of Grafana **Explore** running `{container=~".+"}` returning logs from at least two containers
+- Вывод `docker compose ps`, показывающий все четыре сервиса `Up` (после задачи 4 loki + grafana должны дополнительно сообщать `(healthy)`; alloy + app не обязаны определять healthcheck)
+- Вывод `curl -s http://localhost:3100/ready` — буквально слово `ready`
+- `curl -s http://localhost:3100/loki/api/v1/labels | jq -c .data` — должен включать `container` (и `app` после §2.2)
+- Скриншот живого UI Alloy на `:12345`, показывающий четыре блока, связанных без красных рёбер
+- Скриншот **Explore** в Grafana, выполняющего `{container=~".+"}` и возвращающего логи минимум из двух контейнеров
 
 ---
 
-## Task 2 — Integrate your app & ship JSON logs (3 pts)
+## Задача 2 — Интегрируйте приложение и отгружайте JSON-логи (3 балла)
 
-### 2.1 — Add JSON logging to your Lab 1 Python app
+### 2.1 — Добавьте JSON-логирование в ваше Python-приложение из лабораторной 1
 
-Pick **one** library — both are fine; both produce JSON Loki can parse with `| json`.
+Выберите **одну** библиотеку — обе подходят; обе производят JSON, который Loki может распарсить через `| json`.
 
-| Library | When to pick | Trade-off |
+| Библиотека | Когда выбирать | Компромисс |
 |---|---|---|
-| **`python-json-logger`** | Drop-in over `logging.basicConfig`. Minimal app changes. | Stdlib `logging`'s mental model — handlers, formatters, levels. |
-| **`structlog`** | New code where you want context vars / processors / typed events. | Different API; richer ergonomics. |
+| **`python-json-logger`** | Drop-in поверх `logging.basicConfig`. Минимум изменений в приложении. | Ментальная модель stdlib `logging` — обработчики, форматтеры, уровни. |
+| **`structlog`** | Новый код, где вы хотите контекстные переменные / процессоры / типизированные события. | Другой API; богаче эргономика. |
 
-`YOUR TASK`: upgrade `app_python/app.py` so that the following events emit one **JSON line per event** to stdout (which is what Docker captures and Alloy ships):
+`ВАША ЗАДАЧА`: обновите `app_python/app.py` так, чтобы следующие события выдавали одну **JSON-строку на событие** в stdout (именно это захватывает Docker и отгружает Alloy):
 
-| Event | When | Required JSON fields |
+| Событие | Когда | Обязательные поля JSON |
 |---|---|---|
-| **Startup** | At process start | `level`, `msg`, `host`, `port`, `service` |
-| **Every HTTP request** | After response | `level`, `msg`, `method`, `path`, `status`, `client_ip`, `duration_ms` |
-| **Every error** | In a 500 handler or `try/except` | `level="ERROR"`, `msg`, `error_type`, the exception's string |
+| **Startup** | При старте процесса | `level`, `msg`, `host`, `port`, `service` |
+| **Каждый HTTP-запрос** | После ответа | `level`, `msg`, `method`, `path`, `status`, `client_ip`, `duration_ms` |
+| **Каждая ошибка** | В обработчике 500 или `try/except` | `level="ERROR"`, `msg`, `error_type`, строка исключения |
 
-Hints:
+Подсказки:
 
-- Flask: a `@app.before_request` to capture start time + `@app.after_request` to log; or use `werkzeug`'s built-in logger and replace its formatter with a JSON one.
-- FastAPI: a single middleware with `time.perf_counter()` brackets is cleaner than per-route logging.
-- **Do not** put `request_id` or `user_id` into a **label**. Put them in the JSON body — you'll filter on them at query time with `| json | user_id="alice"`. (Lecture 7, slide 12.)
-- One JSON object per line. No trailing commas. Don't pretty-print — `docker logs` will then split your log lines on every internal newline and your dashboards will be a mess.
+- Flask: `@app.before_request` для захвата времени старта + `@app.after_request` для логирования; или используйте встроенный логгер `werkzeug` и замените его форматтер на JSON-овый.
+- FastAPI: один middleware с обрамлением `time.perf_counter()` чище, чем логирование в каждом маршруте.
+- **Не** кладите `request_id` или `user_id` в **метку**. Кладите их в тело JSON — вы отфильтруете по ним во время запроса через `| json | user_id="alice"`. (Лекция 7, слайд 12.)
+- Один JSON-объект на строку. Без висячих запятых. Не делайте pretty-print — иначе `docker logs` разобьёт ваши строки логов на каждом внутреннем переводе строки, и ваши дашборды превратятся в кашу.
 
-Update `app_python/requirements.txt`:
+Обновите `app_python/requirements.txt`:
 ```
-# python-json-logger>=3.4.0    # YOUR TASK: pin one of these to an exact version
+# python-json-logger>=3.4.0    # ВАША ЗАДАЧА: зафиксируйте одну из них на точной версии
 # structlog>=25.4.0
 ```
 
-Rebuild your image (Lab 2's Dockerfile) so the new dependency lands in the container.
+Пересоберите ваш образ (Dockerfile из лабораторной 2), чтобы новая зависимость попала в контейнер.
 
-### 2.2 — Add your app to the stack
+### 2.2 — Добавьте приложение в стек
 
-You already declared the `app` service in §1.4. Two labels are non-negotiable:
+Вы уже объявили сервис `app` в §1.4. Две метки не обсуждаются:
 
 ```yaml
     labels:
-      logging: "alloy"          # opts the container into Alloy collection (§1.3 filter)
-      app: "devops-python"      # becomes a Loki label via the §1.3 relabel rule
+      logging: "alloy"          # включает контейнер в сбор Alloy (filter §1.3)
+      app: "devops-python"      # становится меткой Loki через правило relabel §1.3
 ```
 
-**Optional but recommended — `plumbing/echo`.** The course repo ships a tiny Go service at `plumbing/echo` (you'll see it again in Lab 9). Add it as a second log source so your dashboards aren't single-app — same two labels, port `8081`, image or `build:` line of your choice.
+**Опционально, но рекомендуется — `plumbing/echo`.** Репозиторий курса поставляет крошечный Go-сервис в `plumbing/echo` (вы увидите его снова в лабораторной 9). Добавьте его как второй источник логов, чтобы ваши дашборды не были моно-приложением — те же две метки, порт `8081`, образ или строка `build:` на ваш выбор.
 
-### 2.3 — Generate traffic and query
+### 2.3 — Сгенерируйте трафик и запросите
 
 ```bash
-# Generate at least 20 successful + 5 not-found + 1 error event
+# Сгенерируйте минимум 20 успешных + 5 not-found + 1 событие ошибки
 for i in $(seq 1 20); do curl -s http://localhost:8080/ > /dev/null; done
 for i in $(seq 1 5);  do curl -s http://localhost:8080/nope > /dev/null; done
-# Force an error: hit an endpoint that raises (add a /boom route or trip a 500 deliberately)
+# Форсируйте ошибку: обратитесь к эндпоинту, который бросает исключение (добавьте маршрут /boom или намеренно вызовите 500)
 curl -s http://localhost:8080/boom > /dev/null
 ```
 
-### 2.4 — Write the LogQL queries (YOUR TASK)
+### 2.4 — Напишите запросы LogQL (ВАША ЗАДАЧА)
 
-For each row below, write the LogQL that answers it. Don't copy from the lecture — answer the question, then verify by running it in Explore.
+Для каждой строки ниже напишите LogQL, отвечающий на неё. Не копируйте из лекции — ответьте на вопрос, затем проверьте, выполнив в Explore.
 
-| # | Question | Hint |
+| # | Вопрос | Подсказка |
 |---|---|---|
-| Q1 | All logs from your Python app | Stream selector on the `app` label, nothing else |
-| Q2 | Only the JSON lines where `level` is `ERROR` | Stream selector → `\| json` → field equality on `level` |
-| Q3 | Rate of errors per minute, per container | Metric query: `sum by (container) (rate(... [1m]))` — chain `\| json \| level="ERROR"` after the stream selector, then wrap the whole log expression in `rate(...[1m])` |
-| Q4 | All requests to a path containing `health` (filter on the **JSON field `path`**, not a substring of the raw line) | `\| json` then a field-equality / regex filter on `path` |
+| Q1 | Все логи вашего Python-приложения | Селектор потока по метке `app`, больше ничего |
+| Q2 | Только JSON-строки, где `level` равен `ERROR` | Селектор потока → `\| json` → равенство поля по `level` |
+| Q3 | Частота ошибок в минуту, по контейнерам | Запрос метрики: `sum by (container) (rate(... [1m]))` — прицепите `\| json \| level="ERROR"` после селектора потока, затем оберните всё выражение логов в `rate(...[1m])` |
+| Q4 | Все запросы к пути, содержащему `health` (фильтр по **полю JSON `path`**, а не по подстроке сырой строки) | `\| json`, затем фильтр равенства / regex по `path` |
 
-> 💡 **Performance order:** stream selector → line filter → parser → field filter → metric. The cheapest filter goes first. Filters cascade left-to-right.
+> 💡 **Порядок для производительности:** селектор потока → строчный фильтр → парсер → фильтр поля → метрика. Самый дешёвый фильтр идёт первым. Фильтры каскадируются слева направо.
 
-### 2.5 — Proof of work
+### 2.5 — Доказательство работы
 
-**Paste into `docs/LAB07.md`:**
+**Вставьте в `docs/LAB07.md`:**
 
-- One full JSON log line from `docker logs <app-container> | head -n 1` — must show all the required fields from §2.1
-- `curl -s http://localhost:3100/loki/api/v1/label/container/values | jq -c .data` — must include your app container's name
-- The output of running Q1–Q4 through the Loki HTTP query API (so the grader sees the data, not just a screenshot):
+- Одну полную JSON-строку лога из `docker logs <app-container> | head -n 1` — она должна показывать все обязательные поля из §2.1
+- `curl -s http://localhost:3100/loki/api/v1/label/container/values | jq -c .data` — должен включать имя вашего контейнера приложения
+- Вывод выполнения Q1–Q4 через HTTP API запросов Loki (чтобы проверяющий видел данные, а не только скриншот):
   ```bash
   curl --get http://localhost:3100/loki/api/v1/query_range \
        --data-urlencode 'query=<YOUR QUERY HERE>' \
        --data-urlencode 'limit=5' | jq '.data.result[0].values[0]'
   ```
-  Show each of Q1–Q4 returning at least one of *your own app's* log lines. (Q3 returns a numeric series, not a log line — show `.data.result[0]` for that one.)
-- The four LogQL queries themselves, in a code block, with one sentence each of what they do
+  Покажите, что каждый из Q1–Q4 возвращает минимум одну строку лога *вашего собственного приложения*. (Q3 возвращает числовой ряд, а не строку лога — покажите `.data.result[0]` для него.)
+- Сами четыре запроса LogQL в блоке кода, с одним предложением каждый о том, что они делают
 
 ---
 
-## Task 3 — Build a log dashboard (2 pts)
+## Задача 3 — Постройте дашборд логов (2 балла)
 
-### 3.1 — One question per panel
+### 3.1 — Один вопрос на панель
 
-A dashboard answers **one question** for **one audience**. The four panels below cover the most common operational questions for a single service. The LogQL queries from Task 2 already cover most of what you need; one is new.
+Дашборд отвечает на **один вопрос** для **одной аудитории**. Четыре панели ниже покрывают самые частые операционные вопросы для одного сервиса. Запросы LogQL из задачи 2 уже покрывают большую часть нужного; один — новый.
 
-| Panel | Visualisation | Question it answers | Source query |
+| Панель | Визуализация | На какой вопрос отвечает | Исходный запрос |
 |---|---|---|---|
-| 1 | Logs | *"What's happening right now?"* | Your Q1 (broaden to `app=~"devops-.*"` if you have multiple apps) |
-| 2 | Time series | *"How busy are we, per app?"* | Request **rate** per app (write this — same shape as Q3 but no error filter) |
-| 3 | Logs | *"What broke?"* | Your Q2 |
-| 4 | Pie chart or Stat | *"How noisy is each level?"* | Distribution of `level` over 5 min — use `count_over_time` + `| json` + `sum by (level)` |
+| 1 | Logs | *«Что происходит прямо сейчас?»* | Ваш Q1 (расширьте до `app=~"devops-.*"`, если у вас несколько приложений) |
+| 2 | Time series | *«Насколько мы загружены, по приложениям?»* | **Частота** запросов на приложение (напишите это — та же форма, что Q3, но без фильтра ошибок) |
+| 3 | Logs | *«Что сломалось?»* | Ваш Q2 |
+| 4 | Pie chart или Stat | *«Насколько шумный каждый уровень?»* | Распределение `level` за 5 мин — используйте `count_over_time` + `| json` + `sum by (level)` |
 
-`YOUR TASK`: write the LogQL for panels 2 and 4 yourself (don't copy from §2.4). Panels 1 and 3 reuse Q1/Q2 verbatim.
+`ВАША ЗАДАЧА`: напишите LogQL для панелей 2 и 4 сами (не копируйте из §2.4). Панели 1 и 3 переиспользуют Q1/Q2 дословно.
 
-### 3.2 — Build it
+### 3.2 — Постройте его
 
-1. **Dashboards → New → New dashboard → Add visualization**. Pick the **Loki** data source.
-2. Paste the LogQL. Choose the visualisation type from the table above.
-3. Title each panel after the **question it answers**, not the data source. ("Errors per minute" beats "Loki query #3".)
-4. Save the dashboard. Then **Share → Export → Save to file** and commit the JSON model to `monitoring/grafana/dashboards/lab07.json`.
+1. **Dashboards → New → New dashboard → Add visualization**. Выберите источник данных **Loki**.
+2. Вставьте LogQL. Выберите тип визуализации из таблицы выше.
+3. Озаглавьте каждую панель по **вопросу, на который она отвечает**, а не по источнику данных. («Ошибки в минуту» лучше, чем «Запрос Loki #3».)
+4. Сохраните дашборд. Затем **Share → Export → Save to file** и закоммитьте JSON-модель в `monitoring/grafana/dashboards/lab07.json`.
 
-> 💡 If a panel is empty, the cause is almost always missing labels, not bad LogQL. Run the panel's query in **Explore** first; if it works there but not in the panel, it's a time-range or data-source-default issue.
+> 💡 Если панель пуста, причина почти всегда — отсутствующие метки, а не плохой LogQL. Сначала выполните запрос панели в **Explore**; если там он работает, а в панели нет — это вопрос диапазона времени или источника данных по умолчанию.
 
-### 3.3 — Proof of work
+### 3.3 — Доказательство работы
 
-**Paste into `docs/LAB07.md`:**
+**Вставьте в `docs/LAB07.md`:**
 
-- Screenshot of the 4-panel dashboard showing real data on all four panels (generate fresh traffic right before the screenshot — empty panels = no credit)
-- The four LogQL queries in a markdown table with the question each answers
-- The committed JSON file path: `monitoring/grafana/dashboards/lab07.json`
-
----
-
-## Task 4 — Production readiness (1 pt)
-
-Harden the stack so it isn't a toy.
-
-### 4.1 — Resource limits
-
-`YOUR TASK`: add `deploy.resources.limits` (cpus + memory) and `reservations` to each of the four services. Pick sane numbers — Loki and Grafana need more memory than Alloy and the app; the app needs almost nothing. Document your choices in `LAB07.md`.
-
-### 4.2 — Secure Grafana
-
-`YOUR TASK`:
-- Set `GF_AUTH_ANONYMOUS_ENABLED=false` (your DEV-ONLY comment in §1.4 reminded you).
-- Set the admin password from a `.env` file: `GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}`.
-- Add `.env` to **`.gitignore`** — and commit the `.gitignore` change.
-- Commit a `.env.example` with the variable name and an empty placeholder so the grader knows the contract.
-
-### 4.3 — Health checks
-
-`YOUR TASK`: add a `healthcheck:` block to **Loki** (test against `:3100/ready`) and **Grafana** (test against `:3000/api/health`). Use `wget --spider` or `curl --fail` inside the container. Pick reasonable `interval`, `timeout`, `retries`, and `start_period` — Loki specifically takes ~15s to be ready after start, so `start_period` must give it that grace.
-
-### 4.4 — Proof of work
-
-**Paste into `docs/LAB07.md`:**
-
-- `docker compose ps` output where Loki and Grafana both report `(healthy)`
-- Screenshot of the Grafana **login page** (i.e. anonymous access is off)
-- Listing of `monitoring/.env.example` and confirmation that `.env` is in `.gitignore` and **not** committed (a `git log -- monitoring/.env` returning nothing is fine evidence)
+- Скриншот дашборда из 4 панелей, показывающий реальные данные на всех четырёх панелях (сгенерируйте свежий трафик прямо перед скриншотом — пустые панели = без баллов)
+- Четыре запроса LogQL в markdown-таблице с вопросом, на который каждый отвечает
+- Путь закоммиченного JSON-файла: `monitoring/grafana/dashboards/lab07.json`
 
 ---
 
-## Task 5 — Documentation (1 pt)
+## Задача 4 — Готовность к проду (1 балл)
 
-`YOUR TASK`: write `monitoring/docs/LAB07.md` with these sections, in order:
+Укрепите стек, чтобы он не был игрушкой.
 
-1. **Architecture** — a Mermaid diagram of app → Alloy → Loki → Grafana, with the network and the Docker socket marked
-2. **Setup** — how to deploy (`docker compose up -d`) and the verification commands from §1.5
-3. **Configuration choices** — your three answers from §1.1, plus a short note on each Loki block (schema, retention, compactor) and each Alloy component
-4. **Application logging** — which library you picked + why + the field schema you emit
-5. **Dashboard** — each panel, its LogQL, the question it answers, and a screenshot
-6. **Production config** — your resource limits + reasoning, Grafana auth, the Docker-socket trade-off
-7. **Challenges & solutions** — at least one real one (not "I was new to Loki")
+### 4.1 — Лимиты ресурсов
 
-Include config **snippets** (not whole files) and the captures from Tasks 1–4. Keep it readable; this is the artefact your future on-call self will read at 3 am.
+`ВАША ЗАДАЧА`: добавьте `deploy.resources.limits` (cpus + memory) и `reservations` к каждому из четырёх сервисов. Выберите разумные числа — Loki и Grafana нуждаются в большем объёме памяти, чем Alloy и приложение; приложению почти ничего не нужно. Задокументируйте свой выбор в `LAB07.md`.
 
----
+### 4.2 — Защитите Grafana
 
-## Bonus Task — Ansible automation (2 pts)
+`ВАША ЗАДАЧА`:
+- Установите `GF_AUTH_ANONYMOUS_ENABLED=false` (ваш комментарий DEV-ONLY в §1.4 напомнил вам).
+- Задайте пароль администратора из файла `.env`: `GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}`.
+- Добавьте `.env` в **`.gitignore`** — и закоммитьте изменение `.gitignore`.
+- Закоммитьте `.env.example` с именем переменной и пустым плейсхолдером, чтобы проверяющий знал контракт.
 
-Automate the whole stack with Ansible, building on Lab 6.
+### 4.3 — Проверки состояния (health check)
 
-`YOUR TASK`: create `roles/monitoring` that brings the entire stack up idempotently.
+`ВАША ЗАДАЧА`: добавьте блок `healthcheck:` в **Loki** (тест против `:3100/ready`) и **Grafana** (тест против `:3000/api/health`). Используйте `wget --spider` или `curl --fail` внутри контейнера. Выберите разумные `interval`, `timeout`, `retries` и `start_period` — Loki в частности тратит ~15с на готовность после старта, поэтому `start_period` должен дать ему эту отсрочку.
 
-The role must:
-- **Template** `loki/config.yml`, `alloy/config.alloy`, and `docker-compose.yml` from Jinja2 — image tags, ports, retention, and resource limits become role variables (defined in `defaults/main.yml`)
-- **Deploy** with `community.docker.docker_compose_v2`
-- **Wait** for Loki `:3100/ready` *and* Grafana `:3000/api/health` before reporting success (use `ansible.builtin.uri` with retries)
-- Be **idempotent**: a second run reports `changed=0` (Lab 5's headline criterion still applies)
+### 4.4 — Доказательство работы
 
-Less hand-holding than Task 1–5: figure out the directory layout, the variable names, and the readiness polling pattern yourself. Lab 6 covered the `docker_compose_v2` deploy mechanics.
+**Вставьте в `docs/LAB07.md`:**
 
-**Evidence (paste into `docs/LAB07.md`):**
-
-- First-run output (changes > 0) and second-run output (`changed=0`)
-- The **rendered** (not template) `docker-compose.yml` from a real run
-- Path: `ansible/roles/monitoring/` + `ansible/playbooks/deploy-monitoring.yml`
+- Вывод `docker compose ps`, где Loki и Grafana оба сообщают `(healthy)`
+- Скриншот **страницы входа** Grafana (то есть анонимный доступ выключен)
+- Листинг `monitoring/.env.example` и подтверждение, что `.env` в `.gitignore` и **не** закоммичен (`git log -- monitoring/.env`, ничего не возвращающий — хорошее доказательство)
 
 ---
 
-## How to Submit
+## Задача 5 — Документация (1 балл)
+
+`ВАША ЗАДАЧА`: напишите `monitoring/docs/LAB07.md` со следующими разделами по порядку:
+
+1. **Архитектура** — диаграмма Mermaid app → Alloy → Loki → Grafana с отмеченными сетью и Docker-сокетом
+2. **Настройка** — как развернуть (`docker compose up -d`) и команды проверки из §1.5
+3. **Выбор конфигурации** — ваши три ответа из §1.1 плюс короткое замечание по каждому блоку Loki (schema, retention, compactor) и каждому компоненту Alloy
+4. **Логирование приложения** — какую библиотеку вы выбрали + почему + схема полей, которые вы эмитите
+5. **Дашборд** — каждая панель, её LogQL, вопрос, на который она отвечает, и скриншот
+6. **Прод-конфиг** — ваши лимиты ресурсов + обоснование, аутентификация Grafana, компромисс Docker-сокета
+7. **Трудности и решения** — минимум одна настоящая (не «я был новичком в Loki»)
+
+Включите **фрагменты** конфигурации (не целые файлы) и захваты из задач 1–4. Держите читаемым; это артефакт, который ваш будущий on-call «я» будет читать в 3 часа ночи.
+
+---
+
+## Бонусная задача — Автоматизация через Ansible (2 балла)
+
+Автоматизируйте весь стек с помощью Ansible, опираясь на лабораторную 6.
+
+`ВАША ЗАДАЧА`: создайте `roles/monitoring`, который идемпотентно поднимает весь стек.
+
+Роль должна:
+- **Шаблонизировать** `loki/config.yml`, `alloy/config.alloy` и `docker-compose.yml` через Jinja2 — теги образов, порты, ретенция и лимиты ресурсов становятся переменными роли (определёнными в `defaults/main.yml`)
+- **Развернуть** через `community.docker.docker_compose_v2`
+- **Дождаться** Loki `:3100/ready` *и* Grafana `:3000/api/health` перед сообщением об успехе (используйте `ansible.builtin.uri` с повторами)
+- Быть **идемпотентным**: второй запуск сообщает `changed=0` (главный критерий лабораторной 5 по-прежнему действует)
+
+Меньше подсказок, чем в задачах 1–5: структуру каталогов, имена переменных и паттерн опроса готовности придумайте сами. Лабораторная 6 покрывала механику развёртывания `docker_compose_v2`.
+
+**Доказательства (вставьте в `docs/LAB07.md`):**
+
+- Вывод первого запуска (изменения > 0) и вывод второго запуска (`changed=0`)
+- **Отрендеренный** (не шаблон) `docker-compose.yml` из реального запуска
+- Путь: `ansible/roles/monitoring/` + `ansible/playbooks/deploy-monitoring.yml`
+
+---
+
+## Как сдавать
 
 ```bash
 git switch -c lab07
 git add monitoring/
-git add app_python/                            # JSON logging upgrade
+git add app_python/                            # обновление JSON-логирования
 git add ansible/roles/monitoring \
-        ansible/playbooks/deploy-monitoring.yml   # only if bonus done
+        ansible/playbooks/deploy-monitoring.yml   # только если сделан бонус
 git commit -m "feat(lab07): loki + alloy + grafana observability stack"
 git push -u origin lab07
 ```
 
-Open **two** PRs:
+Откройте **два** PR:
 
-- `your-fork:lab07` → `course-repo:master` *(reviewed)*
-- `your-fork:lab07` → `your-fork:master` *(merges into your own main)*
+- `your-fork:lab07` → `course-repo:master` *(на проверку)*
+- `your-fork:lab07` → `your-fork:master` *(сливается в ваш собственный main)*
 
-PR checklist:
+Чек-лист PR:
 
 ```text
-- [ ] Task 1 done — stack up, Alloy pipeline wired, container labels visible
-- [ ] Task 2 done — JSON logging in app_python, 4 LogQL queries verified via /query_range
-- [ ] Task 3 done — 4-panel dashboard built, JSON exported into the repo
-- [ ] Task 4 done — limits, healthchecks, anonymous off, .env gitignored
-- [ ] Task 5 done — LAB07.md with all 7 sections + captures + screenshots
-- [ ] Bonus done — idempotent Ansible role with readiness wait
+- [ ] Задача 1 выполнена — стек поднят, конвейер Alloy связан, метки контейнеров видны
+- [ ] Задача 2 выполнена — JSON-логирование в app_python, 4 запроса LogQL проверены через /query_range
+- [ ] Задача 3 выполнена — дашборд из 4 панелей построен, JSON экспортирован в репозиторий
+- [ ] Задача 4 выполнена — лимиты, healthchecks, анонимный доступ выключен, .env в gitignore
+- [ ] Задача 5 выполнена — LAB07.md со всеми 7 разделами + захваты + скриншоты
+- [ ] Бонус выполнен — идемпотентная роль Ansible с ожиданием готовности
 ```
 
 ---
 
-## Acceptance Criteria
+## Критерии приёмки
 
-### Task 1 — Stack deployment (3 pts)
-- ✅ `docker compose up -d` brings up loki, alloy, grafana, app
-- ✅ `curl -s :3100/ready` returns `ready`
-- ✅ `curl -s :3100/loki/api/v1/labels` includes `container` (and `app` after §2.2)
-- ✅ Alloy live UI shows the four-block pipeline with no broken wires
-- ✅ Grafana Explore `{container=~".+"}` returns logs from ≥ 2 containers
+### Задача 1 — Развёртывание стека (3 балла)
+- ✅ `docker compose up -d` поднимает loki, alloy, grafana, app
+- ✅ `curl -s :3100/ready` возвращает `ready`
+- ✅ `curl -s :3100/loki/api/v1/labels` включает `container` (и `app` после §2.2)
+- ✅ Живой UI Alloy показывает конвейер из четырёх блоков без разорванных связей
+- ✅ Grafana Explore `{container=~".+"}` возвращает логи из ≥ 2 контейнеров
 
-### Task 2 — App integration + JSON logging (3 pts)
-- ✅ App emits one JSON object per line; required fields present per event type
-- ✅ App container is labelled `logging=alloy` and `app=devops-python`
-- ✅ Q1–Q4 each return real data via `/loki/api/v1/query_range` (CLI captures pasted)
-- ✅ Q3 / Q4 use the JSON parser + field filters (not raw-line regex)
+### Задача 2 — Интеграция приложения + JSON-логирование (3 балла)
+- ✅ Приложение выдаёт один JSON-объект на строку; обязательные поля присутствуют для каждого типа события
+- ✅ Контейнер приложения помечен `logging=alloy` и `app=devops-python`
+- ✅ Q1–Q4 каждый возвращает реальные данные через `/loki/api/v1/query_range` (захваты CLI вставлены)
+- ✅ Q3 / Q4 используют парсер JSON + фильтры полей (а не regex по сырой строке)
 
-### Task 3 — Dashboard (2 pts)
-- ✅ 4 panels, one per operational question, all showing live data
-- ✅ Panel titles describe the question, not the query
-- ✅ Dashboard JSON committed to `monitoring/grafana/dashboards/lab07.json`
+### Задача 3 — Дашборд (2 балла)
+- ✅ 4 панели, по одной на операционный вопрос, все показывают живые данные
+- ✅ Заголовки панелей описывают вопрос, а не запрос
+- ✅ JSON дашборда закоммичен в `monitoring/grafana/dashboards/lab07.json`
 
-### Task 4 — Production config (1 pt)
-- ✅ All four services have CPU + memory limits and reservations
-- ✅ Grafana anonymous OFF; admin password from `.env`; `.env` gitignored
-- ✅ Loki and Grafana report `(healthy)` in `docker compose ps`
+### Задача 4 — Прод-конфиг (1 балл)
+- ✅ Все четыре сервиса имеют лимиты CPU + памяти и reservations
+- ✅ Анонимный доступ Grafana ВЫКЛ; пароль администратора из `.env`; `.env` в gitignore
+- ✅ Loki и Grafana сообщают `(healthy)` в `docker compose ps`
 
-### Task 5 — Documentation (1 pt)
-- ✅ All seven sections present in `monitoring/docs/LAB07.md`
-- ✅ Research answers from §1.1 are in your own words
-- ✅ Real screenshots + CLI captures (not placeholders)
+### Задача 5 — Документация (1 балл)
+- ✅ Все семь разделов присутствуют в `monitoring/docs/LAB07.md`
+- ✅ Ответы на исследования из §1.1 своими словами
+- ✅ Реальные скриншоты + захваты CLI (не плейсхолдеры)
 
-### Bonus — Ansible (2 pts)
-- ✅ Role templates all three configs from variables
-- ✅ Deploy is idempotent — second run `changed=0`
-- ✅ Readiness wait blocks success until Loki + Grafana respond
-- ✅ Both playbook runs captured in docs
+### Бонус — Ansible (2 балла)
+- ✅ Роль шаблонизирует все три конфига из переменных
+- ✅ Развёртывание идемпотентно — второй запуск `changed=0`
+- ✅ Ожидание готовности блокирует успех, пока Loki + Grafana не ответят
+- ✅ Оба запуска playbook захвачены в документации
 
 ---
 
-## Rubric
+## Рубрика
 
-| Task | Points | Criteria |
+| Задача | Баллы | Критерии |
 |------|-------:|----------|
-| **Task 1** — Stack deployment | **3** | All four services up; Alloy pipeline correctly wired (the four YOUR-TASKs in §1.3 + the volumes/network/labels in §1.4); `/ready` + `/labels` proofs |
-| **Task 2** — App integration | **3** | JSON logging implemented; required fields; Q1–Q4 each return real data via the HTTP API |
-| **Task 3** — Dashboard | **2** | 4 panels with appropriate LogQL; dashboard JSON committed |
-| **Task 4** — Production config | **1** | Limits, anonymous off, healthchecks healthy |
-| **Task 5** — Docs | **1** | All seven sections, real captures, research answers in your own words |
-| **Bonus** — Ansible | **2** | Idempotent templated deployment with readiness wait |
-| **Total** | **12** | 10 main + 2 bonus |
+| **Задача 1** — Развёртывание стека | **3** | Все четыре сервиса подняты; конвейер Alloy правильно связан (четыре ВАША ЗАДАЧА в §1.3 + тома/сеть/метки в §1.4); доказательства `/ready` + `/labels` |
+| **Задача 2** — Интеграция приложения | **3** | JSON-логирование реализовано; обязательные поля; Q1–Q4 каждый возвращает реальные данные через HTTP API |
+| **Задача 3** — Дашборд | **2** | 4 панели с подходящим LogQL; JSON дашборда закоммичен |
+| **Задача 4** — Прод-конфиг | **1** | Лимиты, анонимный доступ выключен, healthchecks здоровы |
+| **Задача 5** — Документация | **1** | Все семь разделов, реальные захваты, ответы на исследования своими словами |
+| **Бонус** — Ansible | **2** | Идемпотентное шаблонизированное развёртывание с ожиданием готовности |
+| **Итого** | **12** | 10 основных + 2 бонусных |
 
 ---
 
-## Resources
+## Ресурсы
 
 <details>
 <summary>📚 Loki</summary>
@@ -580,7 +580,7 @@ PR checklist:
 </details>
 
 <details>
-<summary>⚡ Grafana Alloy (Promtail's successor)</summary>
+<summary>⚡ Grafana Alloy (преемник Promtail)</summary>
 
 - [Alloy documentation](https://grafana.com/docs/alloy/latest/)
 - [`discovery.docker`](https://grafana.com/docs/alloy/latest/reference/components/discovery/discovery.docker/)
@@ -592,9 +592,9 @@ PR checklist:
 </details>
 
 <details>
-<summary>🔍 LogQL & Grafana</summary>
+<summary>🔍 LogQL и Grafana</summary>
 
-- [LogQL reference](https://grafana.com/docs/loki/latest/query/) — every operator with examples
+- [LogQL reference](https://grafana.com/docs/loki/latest/query/) — каждый оператор с примерами
 - [Grafana dashboards](https://grafana.com/docs/grafana/latest/dashboards/)
 - [Loki data source](https://grafana.com/docs/grafana/latest/datasources/loki/)
 - [Explore logs](https://grafana.com/docs/grafana/latest/explore/logs-integration/)
@@ -602,7 +602,7 @@ PR checklist:
 </details>
 
 <details>
-<summary>📝 Structured logging</summary>
+<summary>📝 Структурированное логирование</summary>
 
 - [`structlog`](https://www.structlog.org/en/stable/)
 - [`python-json-logger`](https://github.com/nhairs/python-json-logger)
@@ -612,43 +612,43 @@ PR checklist:
 </details>
 
 <details>
-<summary>⚠️ Common Pitfalls (from real dry-runs)</summary>
+<summary>⚠️ Частые ловушки (из реальных dry-run)</summary>
 
-- **"Ingester not ready, waiting 15s" on first push.** Loki's ingester takes ~15s after the process is alive to report ready. If you query immediately after `docker compose up -d` and see empty results, that's not a bug — it's startup. Wait, retry. Set `healthcheck.start_period: 30s` in Task 4 so compose stops claiming the service is healthy before it actually is.
-- **High-cardinality labels = Loki OOM.** Never put `user_id`, `request_id`, `trace_id`, `email`, or any per-request value into a Loki label (Alloy `discovery.relabel` rule or otherwise). Each unique combination is a stream, each stream costs index + memory, and at 10 M users you'll crash the ingester. Per-request values go in the **JSON body** and you filter at query time with `| json | user_id="alice"`.
-- **Docker socket permissions inside the Alloy container.** On a default Linux install, `/var/run/docker.sock` is owned by root and the `docker` group; inside the Alloy container, the runtime user may not be in that group. If Alloy logs `permission denied` reading the socket, either run the container with `user: root` for this lab (acceptable for dev) or pass `group_add: ["${DOCKER_GID}"]` after capturing the host's docker GID with `getent group docker | cut -d: -f3`.
-- **`subPath` mounts don't refresh on ConfigMap changes** — you'll meet this hard wall in Lab 12 when you redo Loki on Kubernetes. For now, a Compose bind-mount of `loki/config.yml` *does* update when you `docker compose restart loki`, so changes are easy. Internalise the behaviour now; you'll need it later.
-- **Promtail config syntax does NOT translate 1:1 to Alloy.** Promtail's flat list of `pipeline_stages` is split in Alloy between `loki.relabel` (label rewrites) and `loki.process` (parsing / line manipulation). Stage names changed (`docker:` → `stage.docker {}` block, `json:` → `stage.json {}`, etc.). If you have a Promtail config to migrate, use the [official migration tool](https://grafana.com/docs/alloy/latest/set-up/migrate/from-promtail/) rather than translating by hand — the field rename matrix is wider than it looks.
-- **Returning a dict from FastAPI's middleware vs Flask's `after_request`.** FastAPI middleware is awaited; Flask hooks aren't. Don't `await` `request.json()` inside a Flask after_request — it's blocking. Pick one framework's pattern and stay consistent.
-- **JSON log line split by `docker logs`.** If you pretty-print JSON (`json.dumps(obj, indent=2)`), `docker logs` (and therefore Alloy) treats each indented line as a separate log entry — and your `| json` parser will fail on every one of them. Always one JSON object per line, no indentation.
-- **Anonymous Grafana left enabled in Task 4 "by accident".** You said "I'll remember to turn it off" in §1.4. You won't — the comment in your compose file is the only thing that will save you. Leave it.
-- **Port 8080 collides with Lab 6.** Lab 6's Compose stack defaults to host port 8080 too. If you didn't `docker compose down` it before starting this lab, `docker compose up -d` errors with *"Bind for 0.0.0.0:8080 failed: port is already allocated"*. Either bring Lab 6 down (`cd ../app_python && docker compose down`), or pick a different host port for Lab 6's stack (`app_host_port: 8084` in your Lab 6 group_vars). The container labels — `logging=alloy` and `app=devops-python` — must live on **this** lab's `app` container regardless.
-- **Loki's `/ready` returns 503 before `(healthy)` shows up.** The healthcheck in Task 4 polls `/ready`; until Loki's ingester comes up (~15s after process start), `/ready` 503s and `docker compose ps` reports `(starting)`. Set `start_period: 30s` so compose doesn't flap to `(unhealthy)` then back to `(healthy)` and confuse you about whether the stack works.
+- **«Ingester not ready, waiting 15s» при первом пуше.** Ingester Loki тратит ~15с после того, как процесс жив, чтобы сообщить о готовности. Если вы запрашиваете сразу после `docker compose up -d` и видите пустые результаты — это не баг, это запуск. Подождите, повторите. Задайте `healthcheck.start_period: 30s` в задаче 4, чтобы compose перестал утверждать, что сервис здоров, раньше времени.
+- **Метки высокой кардинальности = OOM Loki.** Никогда не кладите `user_id`, `request_id`, `trace_id`, `email` или любое значение на запрос в метку Loki (правило `discovery.relabel` Alloy или иное). Каждая уникальная комбинация — это поток, каждый поток стоит индекса + памяти, и при 10 млн пользователей вы уроните ingester. Значения на запрос идут в **тело JSON**, и вы фильтруете во время запроса через `| json | user_id="alice"`.
+- **Права на Docker-сокет внутри контейнера Alloy.** В установке Linux по умолчанию `/var/run/docker.sock` принадлежит root и группе `docker`; внутри контейнера Alloy runtime-пользователь может не быть в этой группе. Если Alloy пишет `permission denied` при чтении сокета, либо запустите контейнер с `user: root` для этой лабораторной (приемлемо для dev), либо передайте `group_add: ["${DOCKER_GID}"]`, захватив GID docker хоста через `getent group docker | cut -d: -f3`.
+- **Mount'ы `subPath` не обновляются при изменениях ConfigMap** — вы встретите эту глухую стену в лабораторной 12, когда переделаете Loki в Kubernetes. Пока же bind-mount Compose для `loki/config.yml` *действительно* обновляется при `docker compose restart loki`, так что изменения просты. Усвойте поведение сейчас; оно понадобится позже.
+- **Синтаксис конфига Promtail НЕ переносится 1:1 в Alloy.** Плоский список `pipeline_stages` Promtail в Alloy разделён между `loki.relabel` (перезапись меток) и `loki.process` (парсинг / манипуляция строками). Имена стадий изменились (`docker:` → блок `stage.docker {}`, `json:` → `stage.json {}` и т. д.). Если у вас есть конфиг Promtail для миграции, используйте [официальный инструмент миграции](https://grafana.com/docs/alloy/latest/set-up/migrate/from-promtail/), а не переводите вручную — матрица переименования полей шире, чем кажется.
+- **Возврат dict из middleware FastAPI против `after_request` Flask.** Middleware FastAPI ожидается (awaited); хуки Flask — нет. Не делайте `await` `request.json()` внутри after_request Flask — он блокирующий. Выберите паттерн одного фреймворка и придерживайтесь его.
+- **JSON-строка лога разбивается `docker logs`.** Если вы делаете pretty-print JSON (`json.dumps(obj, indent=2)`), `docker logs` (и, следовательно, Alloy) трактует каждую строку с отступом как отдельную запись лога — и ваш парсер `| json` упадёт на каждой из них. Всегда один JSON-объект на строку, без отступов.
+- **Анонимная Grafana осталась включённой в задаче 4 «случайно».** Вы сказали «я запомню отключить это» в §1.4. Не запомните — только комментарий в compose-файле вас спасёт. Оставьте его.
+- **Порт 8080 конфликтует с лабораторной 6.** Стек Compose лабораторной 6 тоже по умолчанию использует хостовый порт 8080. Если вы не выполнили `docker compose down` для него перед началом этой лабораторной, `docker compose up -d` упадёт с *«Bind for 0.0.0.0:8080 failed: port is already allocated»*. Либо погасите лабораторную 6 (`cd ../app_python && docker compose down`), либо выберите другой хостовый порт для стека лабораторной 6 (`app_host_port: 8084` в вашем group_vars лабораторной 6). Метки контейнера — `logging=alloy` и `app=devops-python` — должны быть на контейнере `app` **этой** лабораторной независимо ни от чего.
+- **`/ready` Loki возвращает 503 до появления `(healthy)`.** Healthcheck в задаче 4 опрашивает `/ready`; пока ingester Loki не поднялся (~15с после старта процесса), `/ready` отдаёт 503, и `docker compose ps` сообщает `(starting)`. Задайте `start_period: 30s`, чтобы compose не метался в `(unhealthy)`, а затем обратно в `(healthy)`, путая вас в том, работает ли стек.
 
 </details>
 
 <details>
-<summary>🛠️ Dev tools worth knowing</summary>
+<summary>🛠️ Инструменты разработчика, которые стоит знать</summary>
 
-- [`logcli`](https://grafana.com/docs/loki/latest/query/logcli/) — a CLI for LogQL; faster than the Grafana UI for one-shot queries
-- [`jq`](https://jqlang.github.io/jq/) — JSON pretty-printer; chain `curl … | jq` everywhere
-- [`hey`](https://github.com/rakyll/hey) — generate traffic against your app to populate dashboards
+- [`logcli`](https://grafana.com/docs/loki/latest/query/logcli/) — CLI для LogQL; быстрее UI Grafana для разовых запросов
+- [`jq`](https://jqlang.github.io/jq/) — pretty-printer JSON; прицепляйте `curl … | jq` везде
+- [`hey`](https://github.com/rakyll/hey) — генерирует трафик к вашему приложению, чтобы наполнить дашборды
 
 </details>
 
 ---
 
-## Looking Ahead
+## Взгляд вперёд
 
-| Lab | What it adds |
+| Лабораторная | Что добавляет |
 |---:|---|
-| 8 | The **metrics** pillar — Prometheus + `/metrics` on your Lab 1 app, RED-method PromQL |
-| 9 | Deploy this same app + the `echo` plumbing service on k3d Kubernetes |
-| 12 | ConfigMaps + PVCs — re-mount the Loki config from a ConfigMap; meet the `subPath` foot-gun |
-| 16 | `kube-prometheus-stack` + a Loki Helm chart — the K8s redo of this whole stack |
+| 8 | Столп **метрик** — Prometheus + `/metrics` в вашем приложении из лабораторной 1, PromQL по методу RED |
+| 9 | Разверните это же приложение + обвязочный сервис `echo` в k3d Kubernetes |
+| 12 | ConfigMaps + PVC — перемонтируйте конфиг Loki из ConfigMap; встретьте подводный камень `subPath` |
+| 16 | `kube-prometheus-stack` + Helm-чарт Loki — переделка всего этого стека в K8s |
 
 ---
 
-**Good luck!** 🚀
+**Удачи!** 🚀
 
-> **Remember:** Loki indexes *labels*, not text. Keep label cardinality low; per-request fields belong in the JSON body, filtered at query time with `| json | field="value"`. The Alloy pipeline is four wired components — not a YAML list — and the wires are export names (`.targets`, `.output`, `.receiver`), not block labels.
+> **Помните:** Loki индексирует *метки*, а не текст. Держите кардинальность меток низкой; поля на запрос принадлежат телу JSON, фильтруются во время запроса через `| json | field="value"`. Конвейер Alloy — это четыре связанных компонента, а не YAML-список, и связи — это имена экспортов (`.targets`, `.output`, `.receiver`), а не метки блоков.

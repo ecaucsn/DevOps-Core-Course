@@ -1,436 +1,436 @@
-# Lab 15 — StatefulSets & Persistent Storage
+# Лабораторная работа 15 — StatefulSets и постоянное хранилище
 
-![difficulty](https://img.shields.io/badge/difficulty-advanced-red)
-![topic](https://img.shields.io/badge/topic-StatefulSets-blue)
-![points](https://img.shields.io/badge/points-10%2B2-orange)
-![tech](https://img.shields.io/badge/tech-StatefulSet%20%7C%20PVC%20%7C%20K8s%201.36-informational)
+![сложность](https://img.shields.io/badge/difficulty-advanced-red)
+![тема](https://img.shields.io/badge/topic-StatefulSets-blue)
+![баллы](https://img.shields.io/badge/points-10%2B2-orange)
+![технологии](https://img.shields.io/badge/tech-StatefulSet%20%7C%20PVC%20%7C%20K8s%201.36-informational)
 
-> **Goal:** Run the workloads that *remember*. Give each pod a stable name and its own disk, prove the data on `web-1` follows `web-1` (not a random pod) across a `kubectl delete`.
-> **Deliverable:** A PR from `lab15` converting your Lab 12 chart from a Deployment to a StatefulSet + headless Service, with `k8s/docs/LAB15.md` containing the per-pod-PVC persistence proof (write to `web-1`, kill `web-1`, read same value back; write to `web-0`, prove the values don't cross).
-
----
-
-## Overview
-
-Through Lab 14 every pod was disposable cattle — kill it, get a fresh one with a random name and an empty disk, nobody noticed. That breaks the moment a workload has to remember something *per pod* — a database replica, a queue partition, a search shard. A `Deployment` gives interchangeable pods with shared (or no) storage; a **StatefulSet** gives each pod a stable ordinal name, its own `PersistentVolumeClaim`, and an ordered lifecycle.
-
-In this lab you will practice:
-
-- **Writing a StatefulSet manifest from the API up** — `apiVersion`, `serviceName`, `replicas`, the label triangle, the pod template, and the `volumeClaimTemplates` list
-- **Writing a headless Service from scratch** — and understanding *why* `clusterIP: None` is the thing that makes per-pod DNS exist
-- The headline proof: **write a marker into `web-1`'s volume → `kubectl delete pod web-1` → read the marker back from the new `web-1` → it MATCHES** because `data-web-1` is bound to ordinal 1, not to the pod instance
-- Cross-checking that `web-0`'s data is *its own*, not `web-1`'s — that's the second half of the proof
-
-> ⚠️ **Scope:** k3d's default `local-path` StorageClass, one StatefulSet, three replicas, `ReadWriteOnce` access. No multi-AZ, no operators, no failover. The Bonus introduces update strategies — pick one of three paths.
-
-> 🪨 **Pedagogical core.** Lab 12 proved a PVC survives a pod kill. That used **one shared PVC** for one Deployment replica. Lab 15 proves something deeper: with `volumeClaimTemplates`, each ordinal `N` is bound to its own PVC `data-<sts>-N`, and that binding is sticky across reschedule, restart, even node failure. **If only one capture survives, capture the write-delete-read on `web-1` showing the marker came back.**
+> **Цель:** запустить рабочие нагрузки, которые *помнят*. Дать каждому pod'у стабильное имя и собственный диск, доказать, что данные на `web-1` следуют за `web-1` (а не за случайным pod'ом) после `kubectl delete`.
+> **Результат сдачи:** PR из ветки `lab15`, переводящий ваш чарт из лабораторной 12 с Deployment на StatefulSet + headless-сервис, с `k8s/docs/LAB15.md`, содержащим доказательство персистентности PVC на каждый pod (записать в `web-1`, убить `web-1`, прочитать то же значение; записать в `web-0`, доказать, что значения не пересекаются).
 
 ---
 
-## Project State
+## Обзор
 
-**You should have from previous labs:**
+До лабораторной 14 каждый pod был расходуемой скотиной — убей его, получишь свежий со случайным именем и пустым диском, никто не заметит. Это ломается в момент, когда рабочей нагрузке нужно помнить что-то *на каждый pod* — реплика базы данных, партиция очереди, шард поиска. `Deployment` даёт взаимозаменяемые pod'ы с общим (или никаким) хранилищем; **StatefulSet** даёт каждому pod'у стабильное порядковое имя, собственный `PersistentVolumeClaim` и упорядоченный жизненный цикл.
 
-- Lab 9 — your `web` Deployment + Service on k3d (1.36) with 3 nodes
-- Lab 10 — your `lab10-app` Helm chart
-- Lab 11 — Secrets wired in
-- Lab 12 — the `/visits` counter writing to `$DATA_DIR/visits`, with a PVC mounted at that path, and the write-delete-read persistence proof
+В этой лабораторной вы будете практиковать:
 
-**This lab adds (in your existing chart):**
+- **Написание манифеста StatefulSet с самого API** — `apiVersion`, `serviceName`, `replicas`, треугольник меток, pod template и список `volumeClaimTemplates`
+- **Написание headless-сервиса с нуля** — и понимание, *почему* именно `clusterIP: None` создаёт DNS на каждый pod
+- Главное доказательство: **записать маркер в том `web-1` → `kubectl delete pod web-1` → прочитать маркер из нового `web-1` → он СОВПАДАЕТ**, потому что `data-web-1` привязан к порядковому номеру 1, а не к экземпляру pod'а
+- Перекрёстная проверка, что данные `web-0` — *его собственные*, а не от `web-1`; это вторая половина доказательства
 
-- `templates/statefulset.yaml` — **you write** (replaces the Deployment for this lab; keep `deployment.yaml` in-tree but gate one off via values)
-- `templates/service-headless.yaml` — **you write** (alongside the regular Service from Lab 9; both coexist)
-- A small `values.yaml` change to flip from `Deployment` to `StatefulSet` and set `replicaCount: 3`
-- `k8s/docs/LAB15.md` — your submission report
+> ⚠️ **Область применения:** стандартный StorageClass `local-path` в k3d, один StatefulSet, три реплики, доступ `ReadWriteOnce`. Без multi-AZ, без операторов, без failover. Бонус вводит стратегии обновления — выберите один из трёх путей.
 
-You **do not** remove the existing regular Service (the ClusterIP one from Lab 9). Keep both: the regular Service load-balances across pods for any client that doesn't care which one answers; the headless Service is for per-pod addressing.
-
-> 📚 Pairs with **Lecture 15 — StatefulSets & Persistent Storage**. Re-read slides 5 (the three guarantees), 6–7 (headless Services + per-pod DNS), 8 (`volumeClaimTemplates`), and 19 (the orphaned-PVC trap) before you start.
+> 🪨 **Педагогическое ядро.** Лабораторная 12 доказала, что PVC переживает убийство pod'а. Там использовался **один общий PVC** для одной реплики Deployment. Лабораторная 15 доказывает более глубокое: с `volumeClaimTemplates` каждый порядковый номер `N` привязан к своему PVC `data-<sts>-N`, и эта привязка сохраняется при перепланировании, перезапуске и даже отказе узла. **Если сохранится только один снимок, сохраните write-delete-read на `web-1`, показывающий, что маркер вернулся.**
 
 ---
 
-## Setup
+## Состояние проекта
 
-You need the k3d cluster from Lab 9 running on Kubernetes **1.36**, your `lab10-app` chart, and `kubectl`.
+**У вас должно быть из предыдущих лабораторных:**
+
+- Лабораторная 9 — ваш `web` Deployment + Service на k3d (1.36) с 3 узлами
+- Лабораторная 10 — ваш Helm-чарт `lab10-app`
+- Лабораторная 11 — подключённые секреты
+- Лабораторная 12 — счётчик `/visits`, пишущий в `$DATA_DIR/visits`, с PVC, смонтированным по этому пути, и доказательство персистентности write-delete-read
+
+**Эта лабораторная добавляет (в ваш существующий чарт):**
+
+- `templates/statefulset.yaml` — **пишете вы** (заменяет Deployment для этой лабораторной; оставьте `deployment.yaml` в репозитории, но отключите один через values)
+- `templates/service-headless.yaml` — **пишете вы** (рядом с обычным Service из лабораторной 9; оба сосуществуют)
+- Небольшое изменение `values.yaml`, чтобы переключиться с `Deployment` на `StatefulSet` и задать `replicaCount: 3`
+- `k8s/docs/LAB15.md` — ваш отчёт о сдаче
+
+Вы **не** удаляете существующий обычный Service (тот, что ClusterIP из лабораторной 9). Оставьте оба: обычный Service балансирует нагрузку между pod'ами для любого клиента, которому неважно, кто отвечает; headless-сервис — для адресации конкретного pod'а.
+
+> 📚 В паре с **лекцией 15 — StatefulSets и постоянное хранилище**. Перечитайте слайды 5 (три гарантии), 6–7 (headless-сервисы + DNS на каждый pod), 8 (`volumeClaimTemplates`) и 19 (ловушка осиротевших PVC), прежде чем начать.
+
+---
+
+## Подготовка
+
+Вам нужен кластер k3d из лабораторной 9 на Kubernetes **1.36**, ваш чарт `lab10-app` и `kubectl`.
 
 ```bash
-kubectl get nodes                       # k3d-devops-server-0 + 2 agents on v1.36.x
-kubectl get storageclass                # local-path (default) — what your PVCs will use
+kubectl get nodes                       # k3d-devops-server-0 + 2 агента на v1.36.x
+kubectl get storageclass                # local-path (по умолчанию) — его будут использовать ваши PVC
 helm list -n lab15 2>/dev/null
 ```
 
-> 💡 The cluster note from Lab 12 still applies: k3d ships `local-path` (`rancher.io/local-path`) as the default `StorageClass`, marked `(default)`. It's RWO-only, dynamically-provisioned via hostPath under the hood, perfect for a 3-replica counter — and identical in *interface* to EBS / GCE PD / Ceph RBD in production, so the StatefulSet manifest you write here works unchanged on a real cluster.
+> 💡 Замечание о кластере из лабораторной 12 по-прежнему актуально: k3d поставляет `local-path` (`rancher.io/local-path`) как стандартный `StorageClass`, помеченный `(default)`. Он только для RWO, динамически провижинится через hostPath под капотом, идеален для счётчика с 3 репликами и идентичен по *интерфейсу* EBS / GCE PD / Ceph RBD в production, поэтому манифест StatefulSet, который вы пишете здесь, работает без изменений на реальном кластере.
 
-Directory layout (you'll fill these files yourself):
+Структура каталогов (эти файлы вы заполните сами):
 
 ```
-lab10-app/                              # your Helm chart from Lab 10
+lab10-app/                              # ваш Helm-чарт из лабораторной 10
 ├── templates/
-│   ├── statefulset.yaml                # YOU write this (§Task 2)
-│   ├── service-headless.yaml           # YOU write this (§Task 3)
-│   ├── service.yaml                    # exists from Lab 9 — keep as-is
-│   └── deployment.yaml                 # exists from Lab 9 — keep, gate behind values
-└── values.yaml                         # add: kind toggle, replicaCount, persistence.*
+│   ├── statefulset.yaml                # пишете ВЫ (§Задача 2)
+│   ├── service-headless.yaml           # пишете ВЫ (§Задача 3)
+│   ├── service.yaml                    # существует из лабораторной 9 — оставьте как есть
+│   └── deployment.yaml                 # существует из лабораторной 9 — оставьте, отключите через values
+└── values.yaml                         # добавьте: переключатель kind, replicaCount, persistence.*
 k8s/docs/
-└── LAB15.md                            # your submission report
+└── LAB15.md                            # ваш отчёт о сдаче
 ```
 
 ---
 
-## Task 1 — Concepts: When Identity & Per-Pod Storage Matter (2 pts)
+## Задача 1 — Концепции: когда важны идентичность и хранилище на каждый pod (2 балла)
 
-Before you write a single line of YAML, write down *why* you're writing it. This task is documentation-only — answer in `k8s/docs/LAB15.md` (you'll extend the same file in every subsequent task).
+Прежде чем писать хоть строку YAML, запишите, *почему* вы её пишете. Эта задача только для документации — отвечайте в `k8s/docs/LAB15.md` (вы будете дополнять этот же файл в каждой следующей задаче).
 
-`YOUR TASK`: in 2–3 sentences each, answer:
+`ВАША ЗАДАЧА`: по 2–3 предложения на каждый вопрос, ответьте:
 
-1. **The three guarantees.** What does a StatefulSet give you that a Deployment does not? Hint — the slide 5 list is: stable identity, stable storage, ordered lifecycle. Put them in **your own words** with one sentence each on *which kind of workload needs each one and why*.
+1. **Три гарантии.** Что StatefulSet даёт вам, чего нет у Deployment? Подсказка — список со слайда 5: стабильная идентичность, стабильное хранилище, упорядоченный жизненный цикл. Перескажите их **своими словами**, по одному предложению на каждую о том, *какому типу рабочей нагрузки она нужна и почему*.
 
-2. **Why a Deployment is wrong for Postgres.** Pick **two** of: random pod names, shared (or no) PVC, parallel startup, pod IPs change on restart. For each one, write one sentence on the specific failure mode it causes in a Postgres cluster (lecture 15 slide 3 has the table).
+2. **Почему Deployment не подходит для Postgres.** Выберите **два** из: случайные имена pod'ов, общий (или отсутствующий) PVC, параллельный запуск, pod IP меняются при перезапуске. Для каждого напишите одно предложение о конкретном режиме отказа, который он вызывает в кластере Postgres (таблица на слайде 3 лекции 15).
 
-3. **Headless Services.** Explain in your own words what `clusterIP: None` does to DNS, and why a StatefulSet *requires* a governing headless Service to address individual pods. (Hint: regular Service returns one VIP; headless returns N A records *plus* per-pod records.)
+3. **Headless-сервисы.** Объясните своими словами, что `clusterIP: None` делает с DNS и почему StatefulSet *требует* управляющего headless-сервиса для адресации отдельных pod'ов. (Подсказка: обычный Service возвращает один VIP; headless возвращает N A-записей *плюс* записи на каждый pod.)
 
-4. **When NOT to roll your own.** In 2-3 sentences, when would you stop using a raw StatefulSet and reach for an operator (e.g. CloudNativePG, Strimzi, Rook)? Hint: failover, coordinated backups, point-in-time restore.
+4. **Когда НЕ писать своё.** В 2–3 предложениях: когда вы перестанете использовать голый StatefulSet и возьмёте оператор (например, CloudNativePG, Strimzi, Rook)? Подсказка: failover, согласованные резервные копии, восстановление на момент времени.
 
-`YOUR TASK`: fill in the Deployment vs StatefulSet comparison table in `LAB15.md`. The columns are given; the rows are yours to populate.
+`ВАША ЗАДАЧА`: заполните таблицу сравнения Deployment и StatefulSet в `LAB15.md`. Столбцы даны; строки заполняете вы.
 
-| Feature | Deployment | StatefulSet |
+| Свойство | Deployment | StatefulSet |
 |---|---|---|
-| Pod names | `YOUR TASK` | `YOUR TASK` |
-| Storage | `YOUR TASK` | `YOUR TASK` |
-| Scaling order | `YOUR TASK` | `YOUR TASK` |
-| Network identity | `YOUR TASK` | `YOUR TASK` |
-| Termination order | `YOUR TASK` | `YOUR TASK` |
+| Имена pod'ов | `ВАША ЗАДАЧА` | `ВАША ЗАДАЧА` |
+| Хранилище | `ВАША ЗАДАЧА` | `ВАША ЗАДАЧА` |
+| Порядок масштабирования | `ВАША ЗАДАЧА` | `ВАША ЗАДАЧА` |
+| Сетевая идентичность | `ВАША ЗАДАЧА` | `ВАША ЗАДАЧА` |
+| Порядок завершения | `ВАША ЗАДАЧА` | `ВАША ЗАДАЧА` |
 
-### Proof of work
+### Подтверждение работы
 
-**Paste into `k8s/docs/LAB15.md`:**
+**Вставьте в `k8s/docs/LAB15.md`:**
 
-- All four answers above, in your own words
-- The completed comparison table
-- One sentence applying the *operator rule of thumb* to your `visits` app: would *you* run it as a raw StatefulSet, or reach for an operator? Why?
+- Все четыре ответа выше, своими словами
+- Заполненная таблица сравнения
+- Одно предложение, применяющее *эмпирическое правило об операторах* к вашему приложению `visits`: запустили бы *вы* его как голый StatefulSet или взяли бы оператор? Почему?
 
 ---
 
-## Task 2 — Convert the Deployment to a StatefulSet (3 pts)
+## Задача 2 — Преобразуйте Deployment в StatefulSet (3 балла)
 
-The headline manifest. Below is the **skeleton** — the parts that are essentially the same as your Lab 10 Deployment template are filled in (chart helpers, container shape). The parts that *are the StatefulSet skill* — `replicas`, `selector.matchLabels`, the whole pod template body, and the entire `volumeClaimTemplates` block — are blank. Write them.
+Главный манифест. Ниже — **скелет**: части, по сути совпадающие с шаблоном Deployment из лабораторной 10, заполнены (helper'ы чарта, форма контейнера). Части, которые *и есть навык StatefulSet* — `replicas`, `selector.matchLabels`, всё тело pod template и весь блок `volumeClaimTemplates` — пусты. Напишите их.
 
-### 2.1 — Author `templates/statefulset.yaml`
+### 2.1 — Напишите `templates/statefulset.yaml`
 
 ```yaml
 # lab10-app/templates/statefulset.yaml
-apiVersion: apps/v1                                     # GA since K8s 1.9 — the only group/version
+apiVersion: apps/v1                                     # GA с K8s 1.9 — единственная группа/версия
 kind: StatefulSet
 metadata:
-  name: {{ include "lab10-app.fullname" . }}-web        # same `-web` component suffix as your Lab 10 Deployment;
-                                                        # rendered name on the default release will be `lab10-app-web`,
-                                                        # pods will be `lab10-app-web-0`, `lab10-app-web-1`, `lab10-app-web-2`.
+  name: {{ include "lab10-app.fullname" . }}-web        # тот же суффикс компонента `-web`, что у Deployment из лабораторной 10;
+                                                        # отрендеренное имя при релизе по умолчанию будет `lab10-app-web`,
+                                                        # pod'ы будут `lab10-app-web-0`, `lab10-app-web-1`, `lab10-app-web-2`.
   labels:
     {{- include "lab10-app.labels" . | nindent 4 }}
 spec:
-  serviceName: ___                                      # YOUR TASK: must equal the name of your headless Service in Task 3
-                                                        #            ⚠️ if this is missing or wrong, the controller
-                                                        #            still creates pods but per-pod DNS silently breaks
-  replicas: ___                                         # YOUR TASK: how many ordinals do you need to
-                                                        #            demonstrate per-pod identity AND prove the
-                                                        #            data doesn't cross between pods?
+  serviceName: ___                                      # ВАША ЗАДАЧА: должно совпадать с именем вашего headless-сервиса из задачи 3
+                                                        #            ⚠️ если его нет или оно неверно, контроллер
+                                                        #            всё равно создаст pod'ы, но DNS на каждый pod незаметно сломается
+  replicas: ___                                         # ВАША ЗАДАЧА: сколько порядковых номеров вам нужно,
+                                                        #            чтобы продемонстрировать идентичность каждого pod'а И доказать,
+                                                        #            что данные не пересекаются между pod'ами?
   selector:
     matchLabels:
-      ___: ___                                          # YOUR TASK: the label that matches pod template labels
-                                                        #            AND the headless Service selector — immutable
+      ___: ___                                          # ВАША ЗАДАЧА: метка, совпадающая с метками pod template
+                                                        #            И с селектором headless-сервиса — неизменяемо
   template:
     metadata:
       labels:
-        ___: ___                                        # YOUR TASK: MUST equal selector.matchLabels above
+        ___: ___                                        # ВАША ЗАДАЧА: ДОЛЖНО равняться selector.matchLabels выше
     spec:
       containers:
-        - name: app                                     # YOUR TASK: write the full container spec —
-          # YOUR TASK: image, ports, env (DATA_DIR from Lab 12),
-          # YOUR TASK: volumeMounts (data → /data, matching the volumeClaimTemplate name),
-          # YOUR TASK: readinessProbe pointing at /health (cheap; not the visit counter).
-          # The shape is identical to your Lab 10 Deployment container — copy that, then
-          # change the volume name to match the volumeClaimTemplate you'll write below.
+        - name: app                                     # ВАША ЗАДАЧА: напишите полный spec контейнера —
+          # ВАША ЗАДАЧА: image, ports, env (DATA_DIR из лабораторной 12),
+          # ВАША ЗАДАЧА: volumeMounts (data → /data, совпадающее с именем volumeClaimTemplate),
+          # ВАША ЗАДАЧА: readinessProbe, указывающий на /health (дешёвый; не счётчик посещений).
+          # Форма идентична контейнеру вашего Deployment из лабораторной 10 — скопируйте её, затем
+          # измените имя тома, чтобы оно совпадало с volumeClaimTemplate, который вы напишете ниже.
   volumeClaimTemplates:
-    # YOUR TASK: the whole list. Each entry is a PVC template — it LOOKS like a normal PVC
-    #            with metadata + spec, but it lives INSIDE the StatefulSet. The `metadata.name`
-    #            becomes the PREFIX of the per-pod claim:  data-<sts>-0,  data-<sts>-1,  data-<sts>-2.
-    #            Required fields:
-    #              - metadata.name              (e.g. "data" — matches the volumeMount above)
-    #              - spec.accessModes           (which one for one-Deployment-replica-style writes?)
-    #              - spec.resources.requests.storage  (size — counter is one int)
-    #              - spec.storageClassName      (optional; omit = use cluster default = local-path on k3d)
+    # ВАША ЗАДАЧА: весь список. Каждый элемент — шаблон PVC; он ВЫГЛЯДИТ как обычный PVC
+    #            с metadata + spec, но живёт ВНУТРИ StatefulSet. `metadata.name`
+    #            становится ПРЕФИКСОМ claim'а на каждый pod:  data-<sts>-0,  data-<sts>-1,  data-<sts>-2.
+    #            Обязательные поля:
+    #              - metadata.name              (например, "data" — совпадает с volumeMount выше)
+    #              - spec.accessModes           (какой для записи в стиле одной реплики Deployment?)
+    #              - spec.resources.requests.storage  (размер — счётчик это один int)
+    #              - spec.storageClassName      (необязательно; опустите = использовать кластерный по умолчанию = local-path в k3d)
 ```
 
-**Why each blank matters — read before filling:**
+**Почему важен каждый пропуск — прочитайте перед заполнением:**
 
-- **`spec.serviceName`** — the StatefulSet ↔ DNS bond. The controller uses this name to build the per-pod FQDN `<pod>.<serviceName>.<ns>.svc.cluster.local`. **A missing or wrong `serviceName` is a silent failure: pods still come up, but `kubectl exec web-0 -- getent hosts web-1.<wrong-svc>` returns nothing.** The StatefulSet docs literally call this field out as required.
-- **`replicas`** — pick a number that lets you prove **two** things at once: (a) ordinal identity (need at least 2 to show `web-0 ≠ web-1`), and (b) per-pod PVC binding (the more pods, the more convincing the proof). The reference uses 3.
-- **The label triangle** — same #1 K8s YAML error as Lab 9. `selector.matchLabels` must equal `template.metadata.labels`. The headless Service's `spec.selector` in Task 3 must match the *same* labels.
-- **`volumeClaimTemplates`** — this is **not a PVC**, it is a *template* the controller stamps out one PVC per ordinal from. The block is **immutable after creation**. If you need to resize, you edit the PVCs directly (only works if the StorageClass has `allowVolumeExpansion: true`) — re-templating won't propagate. **Don't bury this in your head until later; lecture 15 slide 19 calls it the resizing trap.**
-- **The container spec** — your `volumeMounts[].name` must equal the `volumeClaimTemplates[].metadata.name`. Mis-name them and the pod starts with `emptyDir` and zero error message — the writes just don't persist.
+- **`spec.serviceName`** — связь StatefulSet ↔ DNS. Контроллер использует это имя для построения FQDN на каждый pod `<pod>.<serviceName>.<ns>.svc.cluster.local`. **Отсутствующий или неверный `serviceName` — это незаметный сбой: pod'ы всё равно поднимаются, но `kubectl exec web-0 -- getent hosts web-1.<wrong-svc>` ничего не возвращает.** Документация StatefulSet прямо называет это поле обязательным.
+- **`replicas`** — выберите число, позволяющее доказать **две** вещи сразу: (а) порядковую идентичность (нужно минимум 2, чтобы показать `web-0 ≠ web-1`) и (б) привязку PVC на каждый pod (чем больше pod'ов, тем убедительнее доказательство). В эталоне используется 3.
+- **Треугольник меток** — та же ошибка YAML в K8s №1, что и в лабораторной 9. `selector.matchLabels` должен равняться `template.metadata.labels`. `spec.selector` headless-сервиса в задаче 3 должен совпадать с *теми же* метками.
+- **`volumeClaimTemplates`** — это **не PVC**, а *шаблон*, из которого контроллер штампует по одному PVC на каждый порядковый номер. Блок **неизменяем после создания**. Если нужно изменить размер, вы редактируете PVC напрямую (работает только если у StorageClass есть `allowVolumeExpansion: true`) — повторное шаблонирование не применится. **Не откладывайте это в голове на потом; слайд 19 лекции 15 называет это ловушкой изменения размера.**
+- **Spec контейнера** — ваш `volumeMounts[].name` должен равняться `volumeClaimTemplates[].metadata.name`. Назовите их неверно — и pod запустится с `emptyDir` и без единого сообщения об ошибке; записи просто не сохранятся.
 
-### 2.2 — Update `values.yaml` and gate the old Deployment
+### 2.2 — Обновите `values.yaml` и отключите старый Deployment
 
-Add to `values.yaml`:
+Добавьте в `values.yaml`:
 
 ```yaml
-# YOUR TASK: add the keys this lab needs. Required:
-#   - a toggle that picks StatefulSet over Deployment (so deployment.yaml doesn't render)
-#   - replicaCount (Task 2)
-#   - persistence.size, persistence.storageClass (Task 2 volumeClaimTemplates)
-# Suggested shape:
-# kind: StatefulSet            # toggle: "StatefulSet" | "Deployment"
+# ВАША ЗАДАЧА: добавьте ключи, нужные этой лабораторной. Обязательно:
+#   - переключатель, выбирающий StatefulSet вместо Deployment (чтобы deployment.yaml не рендерился)
+#   - replicaCount (задача 2)
+#   - persistence.size, persistence.storageClass (volumeClaimTemplates из задачи 2)
+# Предлагаемая форма:
+# kind: StatefulSet            # переключатель: "StatefulSet" | "Deployment"
 # replicaCount: ...
 # persistence:
 #   size: ...
-#   storageClass: ""           # "" → cluster default = local-path on k3d
+#   storageClass: ""           # "" → кластерный по умолчанию = local-path в k3d
 ```
 
-`YOUR TASK`: in `templates/deployment.yaml` (your Lab 10 file), wrap the whole thing in `{{- if eq .Values.kind "Deployment" }} ... {{- end }}` so it doesn't render when you flip the toggle. Do the same gate at the top of `statefulset.yaml` with `eq .Values.kind "StatefulSet"`. **Keep both files in-tree** — graders will check that you didn't delete history.
+`ВАША ЗАДАЧА`: в `templates/deployment.yaml` (ваш файл из лабораторной 10) оберните всё в `{{- if eq .Values.kind "Deployment" }} ... {{- end }}`, чтобы он не рендерился при переключении. Сделайте тот же гейт в начале `statefulset.yaml` с `eq .Values.kind "StatefulSet"`. **Оставьте оба файла в репозитории** — проверяющие будут смотреть, что вы не удалили историю.
 
-### 2.3 — Deploy and verify
+### 2.3 — Разверните и проверьте
 
 ```bash
 helm upgrade --install lab10-app ./lab10-app -n lab15 --create-namespace
-kubectl get statefulset -n lab15                # YOUR TASK: should show 3/3 READY
-kubectl get pods -n lab15 -l app.kubernetes.io/name=lab10-app  # YOUR TASK: ordinal pods, NOT random suffixes
-kubectl get pvc -n lab15                        # YOUR TASK: 3 PVCs named data-<sts>-0/1/2, all Bound
+kubectl get statefulset -n lab15                # ВАША ЗАДАЧА: должно показать 3/3 READY
+kubectl get pods -n lab15 -l app.kubernetes.io/name=lab10-app  # ВАША ЗАДАЧА: порядковые pod'ы, а НЕ случайные суффиксы
+kubectl get pvc -n lab15                        # ВАША ЗАДАЧА: 3 PVC с именами data-<sts>-0/1/2, все Bound
 ```
 
-> 💡 **Debug ladder when this doesn't work first time:**
-> 1. `kubectl describe statefulset <name>` — if the controller refuses to roll, the Events at the bottom name the field.
-> 2. `kubectl get pvc` — `Pending` PVCs with `local-path` is **normal** (`WaitForFirstConsumer`); `Pending` PVCs without a pod consumer = wrong access mode or storage class.
-> 3. `kubectl describe pod <name>-0` — bottom Events on a CrashLoopBackOff or never-starts.
-> 4. **`spec.selector.matchLabels` is immutable** — if you got it wrong on first apply, `helm uninstall lab10-app -n lab15`, `kubectl delete pvc -n lab15 -l app.kubernetes.io/name=lab10-app`, then `helm upgrade --install` again.
+> 💡 **Лестница отладки, если с первого раза не работает:**
+> 1. `kubectl describe statefulset <name>` — если контроллер отказывается катить, Events внизу называют поле.
+> 2. `kubectl get pvc` — `Pending` PVC с `local-path` — это **нормально** (`WaitForFirstConsumer`); `Pending` PVC без pod-потребителя = неверный режим доступа или storage class.
+> 3. `kubectl describe pod <name>-0` — Events внизу при CrashLoopBackOff или если pod не стартует.
+> 4. **`spec.selector.matchLabels` неизменяем** — если ошиблись при первом применении, `helm uninstall lab10-app -n lab15`, `kubectl delete pvc -n lab15 -l app.kubernetes.io/name=lab10-app`, затем снова `helm upgrade --install`.
 
-### 2.4 — Proof of work
+### 2.4 — Подтверждение работы
 
-**Paste into `k8s/docs/LAB15.md`:**
+**Вставьте в `k8s/docs/LAB15.md`:**
 
-- `kubectl get sts,pod,pvc -n lab15` — must show **3/3** ready, ordinal pod names, **3 PVCs** named `data-<sts>-0/1/2`, all `Bound`
-- One sentence on which `accessModes` you chose for `volumeClaimTemplates` and why (`RWO` is correct here — defend it; `RWX` is wrong on local-path)
-- One sentence on **why your `serviceName` value matches the headless Service name** in Task 3 (and what would break if it didn't)
-- The relevant slice of your `statefulset.yaml` — the `volumeClaimTemplates` block specifically, so the grader can see how you defined the per-pod PVC
+- `kubectl get sts,pod,pvc -n lab15` — должно показать **3/3** ready, порядковые имена pod'ов, **3 PVC** с именами `data-<sts>-0/1/2`, все `Bound`
+- Одно предложение о том, какой `accessModes` вы выбрали для `volumeClaimTemplates` и почему (`RWO` здесь правильно — обоснуйте; `RWX` неверен на local-path)
+- Одно предложение о том, **почему ваше значение `serviceName` совпадает с именем headless-сервиса** в задаче 3 (и что сломалось бы, если бы нет)
+- Соответствующий фрагмент вашего `statefulset.yaml` — конкретно блок `volumeClaimTemplates`, чтобы проверяющий увидел, как вы определили PVC на каждый pod
 
 ---
 
-## Task 3 — Headless Service & Per-Pod DNS (2 pts)
+## Задача 3 — Headless-сервис и DNS на каждый pod (2 балла)
 
-This is where `clusterIP: None` earns its keep. A regular Service gets a virtual IP (one entry, kube-proxy load-balances). A **headless** Service has no IP at all — DNS returns the A records of *every* matching pod, *plus* per-pod records of the form `<pod>.<service>.<ns>.svc.cluster.local`. That second form is what makes pod-0 directly addressable in a way pod-1 can't impersonate.
+Здесь `clusterIP: None` оправдывает своё существование. Обычный Service получает виртуальный IP (одна запись, kube-proxy балансирует). У **headless**-сервиса IP нет вовсе — DNS возвращает A-записи *каждого* совпадающего pod'а, *плюс* записи на каждый pod вида `<pod>.<service>.<ns>.svc.cluster.local`. Именно вторая форма делает pod-0 напрямую адресуемым так, как pod-1 не может выдать себя за него.
 
-### 3.1 — Author `templates/service-headless.yaml`
+### 3.1 — Напишите `templates/service-headless.yaml`
 
-The skeleton below shows only the *kind* and `apiVersion` — every other field is yours.
+Скелет ниже показывает только *kind* и `apiVersion` — все остальные поля ваши.
 
 ```yaml
 # lab10-app/templates/service-headless.yaml
-apiVersion: v1                                          # Services live in core v1
+apiVersion: v1                                          # Services живут в core v1
 kind: Service
 metadata:
-  name: ___                                             # YOUR TASK: must equal spec.serviceName from your StatefulSet
-                                                        #            (Task 2). Pick a name that makes the per-pod FQDN
-                                                        #            readable, e.g. <chart>-headless.
+  name: ___                                             # ВАША ЗАДАЧА: должно равняться spec.serviceName из вашего StatefulSet
+                                                        #            (задача 2). Выберите имя, делающее FQDN на каждый pod
+                                                        #            читаемым, например <chart>-headless.
   labels:
     {{- include "lab10-app.labels" . | nindent 4 }}
 spec:
-  clusterIP: ___                                        # YOUR TASK: ONE specific value — the field is what makes this
-                                                        #            Service "headless". A typo (e.g. an empty string,
-                                                        #            or omitting the field) gives you a regular VIP
-                                                        #            and silently defeats per-pod DNS.
+  clusterIP: ___                                        # ВАША ЗАДАЧА: ОДНО конкретное значение — именно это поле делает
+                                                        #            Service "headless". Опечатка (например, пустая строка
+                                                        #            или пропуск поля) даёт обычный VIP
+                                                        #            и незаметно убивает DNS на каждый pod.
   selector:
-    ___: ___                                            # YOUR TASK: must match the StatefulSet pod template labels
-                                                        #            EXACTLY — same label triangle as Task 2.
+    ___: ___                                            # ВАША ЗАДАЧА: должно ТОЧНО совпадать с метками pod template StatefulSet
+                                                        #            — тот же треугольник меток, что в задаче 2.
   ports:
-    - ___                                               # YOUR TASK: the full port list — `name`, `port`, `targetPort`.
-                                                        #            One entry pointing at your app's HTTP port. The
-                                                        #            `port` field on a headless Service is informational
-                                                        #            (no kube-proxy is involved), but you still need it
-                                                        #            for DNS SRV records and for kubectl's port column.
+    - ___                                               # ВАША ЗАДАЧА: полный список портов — `name`, `port`, `targetPort`.
+                                                        #            Одна запись, указывающая на HTTP-порт вашего приложения.
+                                                        #            Поле `port` у headless-сервиса информативное
+                                                        #            (kube-proxy не участвует), но оно всё равно нужно
+                                                        #            для DNS SRV-записей и для столбца port в kubectl.
 ```
 
-**Why each blank matters:**
+**Почему важен каждый пропуск:**
 
-- **`metadata.name`** — this is the second half of the FQDN. Get it wrong and `serviceName` in the StatefulSet points at nothing → per-pod DNS broken, with no error from the StatefulSet controller (it doesn't validate that the Service exists).
-- **`spec.clusterIP`** — the single field that distinguishes headless from regular. Spelled wrong / set to `""` / set to `192.x.x.x` and you get either a Service that won't apply or one that has a VIP and load-balances — which silently breaks the *whole point* of this lab. **There is exactly one valid value.**
-- **`spec.selector`** — the third corner of the label triangle. `kubectl get endpoints <headless-svc>` is your debugging oracle: it must list the pod IPs of your StatefulSet pods. Empty list = selector typo.
-- **`spec.ports`** — you still declare them. Headless Services don't load-balance, but kube-DNS uses the port name for SRV records (cluster-internal service discovery) and `kubectl get svc` shows `<none>` for ClusterIP only if you also forget the port.
+- **`metadata.name`** — это вторая половина FQDN. Ошибётесь — и `serviceName` в StatefulSet указывает в никуда → DNS на каждый pod сломан, без ошибки от контроллера StatefulSet (он не проверяет, что Service существует).
+- **`spec.clusterIP`** — единственное поле, отличающее headless от обычного. Напишете неверно / поставите `""` / поставите `192.x.x.x` — получите либо Service, который не применится, либо Service с VIP и балансировкой, что незаметно ломает *весь смысл* этой лабораторной. **Есть ровно одно допустимое значение.**
+- **`spec.selector`** — третий угол треугольника меток. `kubectl get endpoints <headless-svc>` — ваш оракул для отладки: он должен перечислять pod IP pod'ов вашего StatefulSet. Пустой список = опечатка в селекторе.
+- **`spec.ports`** — вы всё равно их объявляете. Headless-сервисы не балансируют нагрузку, но kube-DNS использует имя порта для SRV-записей (внутрикластерный service discovery), а `kubectl get svc` показывает `<none>` в ClusterIP только если вы ещё и забудете порт.
 
-### 3.2 — Apply and verify per-pod DNS
+### 3.2 — Примените и проверьте DNS на каждый pod
 
 ```bash
-kubectl apply ...                                                # the `helm upgrade` from Task 2 already deployed it
-kubectl get svc -n lab15                                         # YOUR TASK: confirm CLUSTER-IP column shows "None"
-                                                                 #            for your headless Service
-kubectl get endpoints <your-headless-svc> -n lab15               # YOUR TASK: MUST list 3 pod IPs (one per replica)
+kubectl apply ...                                                # `helm upgrade` из задачи 2 уже развернул его
+kubectl get svc -n lab15                                         # ВАША ЗАДАЧА: убедитесь, что столбец CLUSTER-IP показывает "None"
+                                                                 #            для вашего headless-сервиса
+kubectl get endpoints <your-headless-svc> -n lab15               # ВАША ЗАДАЧА: ДОЛЖЕН перечислить 3 pod IP (по одному на реплику)
 ```
 
-`YOUR TASK`: prove that the per-pod DNS record actually resolves. **busybox / your slim Lab 2 image may not ship `nslookup` or `dig`** — use one of these instead:
+`ВАША ЗАДАЧА`: докажите, что DNS-запись на каждый pod действительно резолвится. **В busybox / вашем slim-образе из лабораторной 2 может не быть `nslookup` или `dig`** — используйте вместо них одно из следующего:
 
 ```bash
-# Option A — getent (in glibc; works in most images, fails in busybox/alpine without bind-tools)
+# Вариант A — getent (в glibc; работает в большинстве образов, падает в busybox/alpine без bind-tools)
 kubectl exec -n lab15 <pod-0> -- getent hosts <pod-1>.<headless>.lab15.svc.cluster.local
 
-# Option B — throwaway debug pod with full networking tools
+# Вариант B — одноразовый отладочный pod с полным набором сетевых инструментов
 kubectl run net-debug --rm -it --image=nicolaka/netshoot --restart=Never -n lab15 -- \
   nslookup <pod-1>.<headless>.lab15.svc.cluster.local
 ```
 
-Expect: a single A record matching `<pod-1>`'s current IP, with the FQDN pattern `<pod>.<headless>.<ns>.svc.cluster.local`. The name never changes for a given ordinal even if pod-1 is rescheduled to another node.
+Ожидается: одна A-запись, совпадающая с текущим IP `<pod-1>`, с шаблоном FQDN `<pod>.<headless>.<ns>.svc.cluster.local`. Имя для данного порядкового номера никогда не меняется, даже если pod-1 перепланирован на другой узел.
 
-### 3.3 — Observe ordered startup
+### 3.3 — Понаблюдайте за упорядоченным запуском
 
 ```bash
-kubectl get pods -n lab15 -w                       # in one terminal — watch ordinal-by-ordinal startup
-kubectl scale statefulset <name> -n lab15 --replicas=1   # in another — terminates -2 then -1 (reverse)
-kubectl scale statefulset <name> -n lab15 --replicas=3   # back up — brings -1 then -2 in order
+kubectl get pods -n lab15 -w                       # в одном терминале — смотрите запуск по порядку
+kubectl scale statefulset <name> -n lab15 --replicas=1   # в другом — завершает -2, затем -1 (в обратном порядке)
+kubectl scale statefulset <name> -n lab15 --replicas=3   # обратно вверх — поднимает -1, затем -2 по порядку
 ```
 
-`YOUR TASK`: in `LAB15.md`, write 2–3 sentences on the default `OrderedReady` behaviour you observed, and one example of when `podManagementPolicy: Parallel` is appropriate (hint: Cassandra-style gossip clusters where every node is equal — most databases want the default).
+`ВАША ЗАДАЧА`: в `LAB15.md` напишите 2–3 предложения о наблюдаемом поведении `OrderedReady` по умолчанию и один пример, когда уместен `podManagementPolicy: Parallel` (подсказка: кластеры со сплетнями в стиле Cassandra, где все узлы равны — большинству баз данных нужен режим по умолчанию).
 
-### 3.4 — Proof of work
+### 3.4 — Подтверждение работы
 
-**Paste into `k8s/docs/LAB15.md`:**
+**Вставьте в `k8s/docs/LAB15.md`:**
 
-- `kubectl get svc -n lab15` showing the headless Service with `CLUSTER-IP: None`, alongside your existing regular Service (so the grader sees both coexist)
-- `kubectl get endpoints <headless> -n lab15` showing **3** pod IPs
-- The per-pod DNS resolution output from §3.2, with the FQDN pattern called out
-- The watched-pods capture from §3.3 (paste the relevant lines — ordinal 0 Ready before 1 starts; on scale-down, 2 terminates before 1)
-- Your 2–3 sentences on `OrderedReady` vs `Parallel`
+- `kubectl get svc -n lab15`, показывающий headless-сервис с `CLUSTER-IP: None` рядом с вашим существующим обычным Service (чтобы проверяющий увидел, что оба сосуществуют)
+- `kubectl get endpoints <headless> -n lab15`, показывающий **3** pod IP
+- Вывод разрешения DNS на каждый pod из §3.2 с выделенным шаблоном FQDN
+- Снимок просмотра pod'ов из §3.3 (вставьте нужные строки — порядковый 0 в Ready до запуска 1; при scale-down 2 завершается до 1)
+- Ваши 2–3 предложения о `OrderedReady` vs `Parallel`
 
 ---
 
-## Task 4 — Per-Pod PVC Persistence Proof (2 pts) ← **headline task**
+## Задача 4 — Доказательство персистентности PVC на каждый pod (2 балла) ← **главная задача**
 
-This is the whole point of the lab. **A StatefulSet that runs is not the proof. The proof is:** write a unique marker into `web-1`'s volume, delete `web-1`, wait for the controller to recreate it, read the marker back from the **new** `web-1` — same value. Then write a *different* marker into `web-0`'s volume and show that the markers don't cross — `web-0`'s value is its own, not `web-1`'s.
+В этом весь смысл лабораторной. **Работающий StatefulSet — не доказательство. Доказательство — это:** записать уникальный маркер в том `web-1`, удалить `web-1`, дождаться, пока контроллер воссоздаст его, прочитать маркер из **нового** `web-1` — то же значение. Затем записать *другой* маркер в том `web-0` и показать, что маркеры не пересекаются — значение `web-0` его собственное, а не от `web-1`.
 
-### 4.1 — Write a per-pod marker
+### 4.1 — Запишите маркер на каждый pod
 
-`YOUR TASK`: figure out the four steps yourself. Each one is a `kubectl exec` or `kubectl delete` — no manifest changes.
-
-```bash
-# YOUR TASK: write a UNIQUE marker (epoch seconds, your name, anything distinctive) into
-#            web-1's mounted volume — into /data/marker, on web-1 only
-#
-# YOUR TASK: kubectl delete pod <sts>-1 -n lab15
-#            (the StatefulSet controller will immediately reschedule it — same name,
-#             possibly different node, same PVC reattached)
-#
-# YOUR TASK: kubectl wait --for=condition=Ready pod/<sts>-1 -n lab15 --timeout=60s
-#            (so the next exec doesn't race the pod's startup)
-#
-# YOUR TASK: read /data/marker from the NEW <sts>-1 — assert it MATCHES the value you wrote
-```
-
-If the marker comes back the **same**, you've proven the headline guarantee: `data-<sts>-1` is bound to ordinal 1, not to the pod instance. The new pod inherited the old pod's PVC.
-
-If the marker is **missing** (file not found) → your `volumeClaimTemplates` didn't mount at `DATA_DIR`, or you wrote to an `emptyDir` by accident (volume name mismatch — see Task 2 hints).
-
-If the marker comes back **different / empty** → you're not using `volumeClaimTemplates`; you're using a shared PVC mounted twice, which is wrong for RWO.
-
-### 4.2 — Prove the markers don't cross
-
-`YOUR TASK`: write a **different** marker into `web-0`'s volume. Then read both back. Show that `web-0` has its own marker and `web-1` has its own — they are not the same. (This is the per-pod *isolation* half of the proof. Without it, you've only shown one pod's PVC survived, not that pod-N owns its own PVC.)
+`ВАША ЗАДАЧА`: придумайте четыре шага сами. Каждый — это `kubectl exec` или `kubectl delete`, без изменений манифестов.
 
 ```bash
-# YOUR TASK: write a DIFFERENT marker into <sts>-0 's /data/marker
-# YOUR TASK: read /data/marker from <sts>-0 AND from <sts>-1
-#            They must be DIFFERENT — each pod's marker is its own.
+# ВАША ЗАДАЧА: запишите УНИКАЛЬНЫЙ маркер (epoch-секунды, ваше имя, что-нибудь отличительное)
+#            в смонтированный том web-1 — в /data/marker, только на web-1
+#
+# ВАША ЗАДАЧА: kubectl delete pod <sts>-1 -n lab15
+#            (контроллер StatefulSet немедленно перепланирует его — то же имя,
+#             возможно, другой узел, тот же PVC переподключён)
+#
+# ВАША ЗАДАЧА: kubectl wait --for=condition=Ready pod/<sts>-1 -n lab15 --timeout=60s
+#            (чтобы следующий exec не соревновался со стартом pod'а)
+#
+# ВАША ЗАДАЧА: прочитайте /data/marker из НОВОГО <sts>-1 — убедитесь, что он СОВПАДАЕТ с записанным значением
 ```
 
-### 4.3 — One more sanity check — the visits counter
+Если маркер возвращается **тем же**, вы доказали главную гарантию: `data-<sts>-1` привязан к порядковому номеру 1, а не к экземпляру pod'а. Новый pod унаследовал PVC старого.
 
-Your Lab 12 `/visits` counter now lives on a per-pod PVC. Drive traffic to each pod individually and show that the counters are *independent*:
+Если маркер **отсутствует** (файл не найден) → ваш `volumeClaimTemplates` не смонтировался в `DATA_DIR`, или вы случайно писали в `emptyDir` (несовпадение имени тома — см. подсказки в задаче 2).
+
+Если маркер возвращается **другим / пустым** → вы не используете `volumeClaimTemplates`, а используете общий PVC, смонтированный дважды, что неправильно для RWO.
+
+### 4.2 — Докажите, что маркеры не пересекаются
+
+`ВАША ЗАДАЧА`: запишите **другой** маркер в том `web-0`. Затем прочитайте оба. Покажите, что у `web-0` свой маркер, а у `web-1` свой — они не одинаковы. (Это половина доказательства про *изоляцию* на каждый pod. Без неё вы показали лишь, что PVC одного pod'а выжил, а не что pod-N владеет своим PVC.)
+
+```bash
+# ВАША ЗАДАЧА: запишите ДРУГОЙ маркер в /data/marker у <sts>-0
+# ВАША ЗАДАЧА: прочитайте /data/marker из <sts>-0 И из <sts>-1
+#            Они должны быть РАЗНЫМИ — маркер каждого pod'а его собственный.
+```
+
+### 4.3 — Ещё одна проверка — счётчик посещений
+
+Ваш счётчик `/visits` из лабораторной 12 теперь живёт на PVC каждого pod'а. Направьте трафик к каждому pod'у отдельно и покажите, что счётчики *независимы*:
 
 ```bash
 kubectl port-forward -n lab15 pod/<sts>-0 8080:8080 &
 kubectl port-forward -n lab15 pod/<sts>-1 8081:8080 &
-# YOUR TASK: curl localhost:8080/visits   — pod-0's counter only
-# YOUR TASK: curl localhost:8081/visits   — pod-1's counter only
-# YOUR TASK: hit pod-0 a few extra times; pod-1's count must NOT change
+# ВАША ЗАДАЧА: curl localhost:8080/visits   — только счётчик pod-0
+# ВАША ЗАДАЧА: curl localhost:8081/visits   — только счётчик pod-1
+# ВАША ЗАДАЧА: обратитесь к pod-0 ещё несколько раз; счётчик pod-1 НЕ должен измениться
 ```
 
-### 4.4 — Proof of work
+### 4.4 — Подтверждение работы
 
-**Paste into `k8s/docs/LAB15.md` (this is the headline section — make it impossible to miss):**
+**Вставьте в `k8s/docs/LAB15.md` (это главный раздел — сделайте так, чтобы его невозможно было пропустить):**
 
-- **The §4.1 capture**, side by side: `kubectl exec <sts>-1 -- cat /data/marker` (original) → `kubectl delete pod <sts>-1` → `kubectl wait ...` → `kubectl exec <sts>-1 -- cat /data/marker` (new pod, **same value**)
-- **The §4.2 capture**: both pods' markers, clearly different values
-- The §4.3 visit counter divergence — 2-3 curl outputs proving pod-0's count is decoupled from pod-1's
-- One sentence on **why** this works (PVC bound to ordinal via `volumeClaimTemplates`, controller reattaches on reschedule)
-
----
-
-## Task 5 — Documentation (1 pt)
-
-Pull everything together into `k8s/docs/LAB15.md`. Required sections, in order:
-
-1. **Concepts** — the four answers and the comparison table from Task 1
-2. **Manifests** — short paragraphs on the choices you made in your `statefulset.yaml` and `service-headless.yaml`: which `accessModes`, which storage class, which `serviceName`, which `clusterIP`. Cite the *specific failure each would have caused* if you'd picked wrong.
-3. **Resource inventory** — `kubectl get sts,pod,pvc,svc -n lab15` showing the StatefulSet, ordinal pods, per-ordinal PVCs, both Services (regular + headless)
-4. **Network identity** — the per-pod DNS resolution from Task 3.2 with the FQDN pattern explained, plus the ordered startup/scale-down observation
-5. **Per-pod PVC persistence proof** — the Task 4 captures: write-delete-wait-read on `web-1` with the same marker, plus the `web-0` vs `web-1` non-crossing check, plus the visits counter divergence
-6. **Common pitfalls you hit** — at least one real one with how you debugged it (a `kubectl describe` line that unblocked you, a missing field, a typo)
-
-> Keep all `kubectl`/`curl` output clearly marked as captured from your cluster. Do not paste output you didn't actually generate.
+- **Снимок из §4.1** бок о бок: `kubectl exec <sts>-1 -- cat /data/marker` (исходный) → `kubectl delete pod <sts>-1` → `kubectl wait ...` → `kubectl exec <sts>-1 -- cat /data/marker` (новый pod, **то же значение**)
+- **Снимок из §4.2**: маркеры обоих pod'ов с явно разными значениями
+- Расхождение счётчиков посещений из §4.3 — 2–3 вывода curl, доказывающие, что счётчик pod-0 отделён от счётчика pod-1
+- Одно предложение о том, **почему** это работает (PVC привязан к порядковому номеру через `volumeClaimTemplates`, контроллер переподключает его при перепланировании)
 
 ---
 
-## Bonus Task — Update Strategies for Stateful Workloads (2 pts)
+## Задача 5 — Документация (1 балл)
 
-Upgrading the primary of a stateful cluster matters *far* more than swapping a stateless frontend — the cost of an automated mistake is "restore from backup". K8s gives you two strategies (`RollingUpdate` with `partition`, and `OnDelete`), and the broader ecosystem gives you a third (operators that handle upgrades for you).
+Соберите всё вместе в `k8s/docs/LAB15.md`. Обязательные разделы по порядку:
 
-**The problem:** you need to canary a stateful workload — upgrade *one* pod first, validate, then roll forward. A naive `RollingUpdate` of a Deployment ships the new image to every replica with no human gate.
+1. **Концепции** — четыре ответа и таблица сравнения из задачи 1
+2. **Манифесты** — короткие абзацы о решениях, принятых в `statefulset.yaml` и `service-headless.yaml`: какие `accessModes`, какой storage class, какой `serviceName`, какой `clusterIP`. Укажите *конкретный сбой, который каждый вызвал бы*, если бы вы выбрали неверно.
+3. **Инвентаризация ресурсов** — `kubectl get sts,pod,pvc,svc -n lab15`, показывающий StatefulSet, порядковые pod'ы, PVC на каждый порядковый номер, оба Service (обычный + headless)
+4. **Сетевая идентичность** — разрешение DNS на каждый pod из задачи 3.2 с объяснением шаблона FQDN, плюс наблюдение за упорядоченным запуском/масштабированием вниз
+5. **Доказательство персистентности PVC на каждый pod** — снимки из задачи 4: write-delete-wait-read на `web-1` с тем же маркером, плюс проверка непересечения `web-0` и `web-1`, плюс расхождение счётчиков посещений
+6. **Типичные ошибки, с которыми вы столкнулись** — как минимум одна настоящая с описанием того, как вы её отлаживали (строка `kubectl describe`, которая разблокировала вас, пропущенное поле, опечатка)
 
-**The task:** pick **one** of three paths below and implement it. Each is worth the full 2 points. Don't ship YAML you copied from a tutorial — research the strategy, decide why you picked it over the others, document the trade-off.
-
-### Path A — `RollingUpdate` with `partition`
-
-The `partition` field is the StatefulSet equivalent of a canary. Pods with ordinal `>= partition` get the new pod template; the rest stay on the old one. You decrement `partition` to roll the update forward.
-
-`YOUR TASK`:
-
-1. Add `spec.updateStrategy` to your StatefulSet. Pick `type: RollingUpdate` with `rollingUpdate.partition` set to your **highest ordinal** so only the top pod updates when you change the image.
-2. Change `image.tag` in `values.yaml` to a new version (rebuild your Lab 2 image with a fresh tag, or temporarily change the container `name:` — anything that makes the pod template hash different).
-3. `helm upgrade ...`. Verify that *only* the highest-ordinal pod restarts on the new template. The others stay on the old one.
-4. Walk `partition` down (highest → ... → 0) re-applying each time, and capture the rollout progress between each step.
-
-You write the YAML. No skeleton.
-
-### Path B — `OnDelete`
-
-`type: OnDelete` is the "the controller does *nothing* on a spec change; humans drive the rollout" mode — what most production database upgrades actually look like.
-
-`YOUR TASK`:
-
-1. Add `spec.updateStrategy.type: OnDelete` to your StatefulSet.
-2. Change `image.tag` and `helm upgrade ...`. Verify that **no pods restart**. The controller is intentionally inert.
-3. `kubectl delete pod <sts>-2` (or whichever ordinal you want to update first). Show that *only that pod* comes back on the new template. The others remain on the old one until you delete them too.
-4. Document one real-world scenario where `OnDelete` is the right answer (hint: strict change windows; coordinated DB primary/replica upgrades where a human checks replication lag between each step).
-
-You write the YAML. No skeleton.
-
-### Path C — A database operator
-
-Drop the hand-rolled StatefulSet for one stateful workload and run it via a purpose-built operator instead. Document what the operator does that your raw StatefulSet could not.
-
-`YOUR TASK`:
-
-1. Install **one** operator: **CloudNativePG** (PostgreSQL), **Strimzi** (Kafka), or a storage operator like **Rook** (Ceph) / **Longhorn**.
-2. Declare a Custom Resource (e.g. CloudNativePG `kind: Cluster` with `instances: 3`).
-3. Observe that the operator *itself* creates the underlying StatefulSet + Services + PVCs — `kubectl get sts,svc,pvc -n <op-ns>` after applying the CR.
-4. Document the value-add in `LAB15.md`: automatic primary election + failover, continuous WAL or topic backups, coordinated rolling upgrades, bundled `PodMonitor` metrics — none of which a raw StatefulSet provides.
-
-### Proof of work (whichever path you picked)
-
-**Paste into `k8s/docs/LAB15.md`:**
-
-- The updated manifest snippet (your `updateStrategy` block, or your CR YAML for Path C)
-- The `kubectl rollout status` / `kubectl get pods -w` capture showing the partial rollout (Paths A & B), or the operator-managed `kubectl get sts,svc,pvc` (Path C)
-- **One paragraph** on *why* you picked this path over the other two — the trade-offs, what your `visits` app actually needs, what production tooling you would consider next
+> Держите весь вывод `kubectl`/`curl` явно помеченным как снятый с вашего кластера. Не вставляйте вывод, который вы на самом деле не генерировали.
 
 ---
 
-## How to Submit
+## Бонусная задача — Стратегии обновления для stateful-нагрузок (2 балла)
+
+Обновление primary в stateful-кластере значит *гораздо* больше, чем замена stateless-фронтенда — цена автоматизированной ошибки — «восстановить из резервной копии». K8s даёт две стратегии (`RollingUpdate` с `partition` и `OnDelete`), а более широкая экосистема — третью (операторы, которые делают обновления за вас).
+
+**Проблема:** вам нужно канареечно раскатить stateful-нагрузку — сначала обновить *один* pod, провалидировать, затем катить дальше. Наивный `RollingUpdate` у Deployment доставляет новый образ каждой реплике без человеческого гейта.
+
+**Задача:** выберите **один** из трёх путей ниже и реализуйте его. Каждый стоит полных 2 баллов. Не сдавайте YAML, скопированный из туториала — изучите стратегию, решите, почему выбрали её, а не другие, опишите компромисс.
+
+### Путь A — `RollingUpdate` с `partition`
+
+Поле `partition` — это эквивалент canary для StatefulSet. Pod'ы с порядковым номером `>= partition` получают новый pod template; остальные остаются на старом. Вы уменьшаете `partition`, чтобы катить обновление дальше.
+
+`ВАША ЗАДАЧА`:
+
+1. Добавьте `spec.updateStrategy` в ваш StatefulSet. Выберите `type: RollingUpdate` с `rollingUpdate.partition`, равным вашему **наибольшему порядковому номеру**, чтобы при смене образа обновлялся только старший pod.
+2. Измените `image.tag` в `values.yaml` на новую версию (пересоберите образ из лабораторной 2 с новым тегом или временно измените `name:` контейнера — что угодно, что сделает hash pod template другим).
+3. `helm upgrade ...`. Убедитесь, что на новом шаблоне перезапускается *только* pod с наибольшим порядковым номером. Остальные остаются на старом.
+4. Постепенно уменьшайте `partition` (наибольший → ... → 0), применяя заново каждый раз, и фиксируйте прогресс раскатки между шагами.
+
+YAML пишете вы. Скелета нет.
+
+### Путь B — `OnDelete`
+
+`type: OnDelete` — это режим «контроллер *ничего* не делает при изменении spec; раскаткой управляют люди», который на самом деле напоминает большинство production-обновлений баз данных.
+
+`ВАША ЗАДАЧА`:
+
+1. Добавьте `spec.updateStrategy.type: OnDelete` в ваш StatefulSet.
+2. Измените `image.tag` и выполните `helm upgrade ...`. Убедитесь, что **никакие pod'ы не перезапускаются**. Контроллер намеренно бездействует.
+3. `kubectl delete pod <sts>-2` (или любой порядковый номер, который хотите обновить первым). Покажите, что *только этот pod* возвращается на новом шаблоне. Остальные остаются на старом, пока вы их тоже не удалите.
+4. Опишите один реальный сценарий, где `OnDelete` — правильный ответ (подсказка: строгие окна изменений; согласованные обновления primary/replica БД, где человек проверяет отставание репликации между шагами).
+
+YAML пишете вы. Скелета нет.
+
+### Путь C — Оператор базы данных
+
+Откажитесь от самодельного StatefulSet для одной stateful-нагрузки и запустите её через специально созданный оператор. Опишите, что оператор делает такого, чего не мог ваш голый StatefulSet.
+
+`ВАША ЗАДАЧА`:
+
+1. Установите **один** оператор: **CloudNativePG** (PostgreSQL), **Strimzi** (Kafka) или storage-оператор вроде **Rook** (Ceph) / **Longhorn**.
+2. Объявите Custom Resource (например, CloudNativePG `kind: Cluster` с `instances: 3`).
+3. Понаблюдайте, что оператор *сам* создаёт нижележащие StatefulSet + Services + PVC — `kubectl get sts,svc,pvc -n <op-ns>` после применения CR.
+4. Опишите добавленную ценность в `LAB15.md`: автоматические выборы primary + failover, непрерывные резервные копии WAL или топиков, согласованные rolling-обновления, встроенные метрики `PodMonitor` — ничего из чего голый StatefulSet не даёт.
+
+### Подтверждение работы (какой бы путь вы ни выбрали)
+
+**Вставьте в `k8s/docs/LAB15.md`:**
+
+- Обновлённый фрагмент манифеста (ваш блок `updateStrategy` или YAML CR для пути C)
+- Снимок `kubectl rollout status` / `kubectl get pods -w`, показывающий частичную раскатку (пути A и B), или управляемый оператором `kubectl get sts,svc,pvc` (путь C)
+- **Один абзац** о том, *почему* вы выбрали этот путь, а не два других — компромиссы, что на самом деле нужно вашему приложению `visits`, какой production-инструментарий вы рассмотрели бы дальше
+
+---
+
+## Как сдавать
 
 ```bash
 git switch -c lab15
@@ -439,180 +439,180 @@ git commit -m "feat(lab15): convert chart to StatefulSet with per-pod PVCs + hea
 git push -u origin lab15
 ```
 
-Open **two** PRs:
+Откройте **два** PR:
 
-- `your-fork:lab15` → `course-repo:master` *(reviewed)*
-- `your-fork:lab15` → `your-fork:master` *(merges into your own main)*
+- `your-fork:lab15` → `course-repo:master` *(проверяется)*
+- `your-fork:lab15` → `your-fork:master` *(сливается в ваш собственный main)*
 
-PR checklist:
+Чек-лист PR:
 
 ```text
-- [ ] Task 1 done — concepts, comparison table, operator rule-of-thumb in LAB15.md
-- [ ] Task 2 done — StatefulSet with serviceName + replicas + label triangle + volumeClaimTemplates, 3 ordinal pods + 3 Bound per-pod PVCs
-- [ ] Task 3 done — headless Service with clusterIP: None, per-pod DNS resolution captured, ordered startup observed
-- [ ] Task 4 done — write→delete-pod→read SAME marker on web-1; web-0 marker is its own; visits counters independent per pod
-- [ ] Task 5 done — LAB15.md with all 6 sections + real evidence
-- [ ] Bonus done — Path A (partition) OR Path B (OnDelete) OR Path C (operator) with justification
+- [ ] Задача 1 выполнена — концепции, таблица сравнения, эмпирическое правило об операторах в LAB15.md
+- [ ] Задача 2 выполнена — StatefulSet с serviceName + replicas + треугольником меток + volumeClaimTemplates, 3 порядковых pod'а + 3 Bound PVC на каждый pod
+- [ ] Задача 3 выполнена — headless Service с clusterIP: None, зафиксировано разрешение DNS на каждый pod, наблюдение за упорядоченным запуском
+- [ ] Задача 4 выполнена — write→delete-pod→read ТОГО ЖЕ маркера на web-1; маркер web-0 свой собственный; счётчики посещений независимы на каждый pod
+- [ ] Задача 5 выполнена — LAB15.md со всеми 6 разделами + реальные доказательства
+- [ ] Бонус выполнен — путь A (partition) ИЛИ путь B (OnDelete) ИЛИ путь C (оператор) с обоснованием
 ```
 
 ---
 
-## Acceptance Criteria
+## Критерии приёмки
 
-### Task 1 — Concepts (2 pts)
-- ✅ Three StatefulSet guarantees described in your own words
-- ✅ Two specific Deployment failure modes for Postgres explained
-- ✅ Headless Service (`clusterIP: None`) DNS behaviour explained
-- ✅ "When to use an operator" note included
-- ✅ Comparison table filled in (all five rows)
+### Задача 1 — Концепции (2 балла)
+- ✅ Три гарантии StatefulSet описаны своими словами
+- ✅ Два конкретных режима отказа Deployment для Postgres объяснены
+- ✅ Объяснено поведение DNS у headless-сервиса (`clusterIP: None`)
+- ✅ Включена заметка «когда использовать оператор»
+- ✅ Таблица сравнения заполнена (все пять строк)
 
-### Task 2 — Convert to StatefulSet (3 pts)
-- ✅ `templates/statefulset.yaml` written by hand
-- ✅ `spec.serviceName` set and matches the headless Service name from Task 3
-- ✅ Label triangle consistent (selector.matchLabels = template labels = headless Service selector)
-- ✅ `replicas: 3` (or justified higher); pods named `<name>-0/1/2`
-- ✅ `volumeClaimTemplates` block written; per-pod PVCs render as `data-<name>-N` and **all three Bound**
-- ✅ Container `volumeMounts[].name` matches `volumeClaimTemplates[].metadata.name`
-- ✅ Old `deployment.yaml` gated behind values, not deleted
+### Задача 2 — Преобразование в StatefulSet (3 балла)
+- ✅ `templates/statefulset.yaml` написан вручную
+- ✅ `spec.serviceName` задан и совпадает с именем headless-сервиса из задачи 3
+- ✅ Треугольник меток согласован (selector.matchLabels = метки template = селектор headless-сервиса)
+- ✅ `replicas: 3` (или обоснованно больше); pod'ы с именами `<name>-0/1/2`
+- ✅ Блок `volumeClaimTemplates` написан; PVC на каждый pod рендерятся как `data-<name>-N` и **все три Bound**
+- ✅ `volumeMounts[].name` контейнера совпадает с `volumeClaimTemplates[].metadata.name`
+- ✅ Старый `deployment.yaml` отключён через values, а не удалён
 
-### Task 3 — Headless Service & Lifecycle (2 pts)
-- ✅ `templates/service-headless.yaml` written by hand
-- ✅ `spec.clusterIP: None` set (not omitted, not "")
-- ✅ Selector matches the StatefulSet pod labels exactly
-- ✅ Regular Service (Lab 9) coexists, not deleted
-- ✅ Per-pod DNS resolution captured with FQDN pattern visible
-- ✅ Ordered startup / reverse-order scale-down observed
+### Задача 3 — Headless-сервис и жизненный цикл (2 балла)
+- ✅ `templates/service-headless.yaml` написан вручную
+- ✅ `spec.clusterIP: None` задан (не пропущен, не "")
+- ✅ Селектор точно совпадает с метками pod'ов StatefulSet
+- ✅ Обычный Service (лабораторная 9) сосуществует, не удалён
+- ✅ Зафиксировано разрешение DNS на каждый pod с видимым шаблоном FQDN
+- ✅ Наблюдение за упорядоченным запуском / обратным порядком при масштабировании вниз
 
-### Task 4 — PVC persistence proof (2 pts)
-- ✅ **`web-1` marker survives `kubectl delete pod web-1`** — same value before and after, captured side by side
-- ✅ **`web-0`'s marker is its own** — different from `web-1`'s
-- ✅ Visit counters independent per pod
-- ✅ One-sentence "why this works" referencing `volumeClaimTemplates` + ordinal binding
+### Задача 4 — Доказательство персистентности PVC (2 балла)
+- ✅ **Маркер `web-1` переживает `kubectl delete pod web-1`** — то же значение до и после, зафиксировано бок о бок
+- ✅ **Маркер `web-0` — его собственный** — отличается от маркера `web-1`
+- ✅ Счётчики посещений независимы на каждый pod
+- ✅ Одно предложение «почему это работает» со ссылкой на `volumeClaimTemplates` + привязку к порядковому номеру
 
-### Task 5 — docs (1 pt)
-- ✅ All 6 sections in `k8s/docs/LAB15.md`; real CLI captures (not illustrative)
-- ✅ Pitfalls section includes at least one real one you hit
+### Задача 5 — документация (1 балл)
+- ✅ Все 6 разделов в `k8s/docs/LAB15.md`; реальные CLI-снимки (не иллюстративные)
+- ✅ Раздел ошибок включает как минимум одну настоящую, с которой вы столкнулись
 
-### Bonus — Update Strategies / Operator (2 pts)
-- ✅ Exactly one path implemented (A / B / C)
-- ✅ YAML written by you, not copy-pasted from a tutorial
-- ✅ Proof captures match the path (partition decrement, manual delete, or operator-managed resource list)
-- ✅ Paragraph on *why this path over the other two*
+### Бонус — Стратегии обновления / оператор (2 балла)
+- ✅ Реализован ровно один путь (A / B / C)
+- ✅ YAML написан вами, а не скопирован из туториала
+- ✅ Доказательства соответствуют пути (уменьшение partition, ручное удаление или список ресурсов, управляемых оператором)
+- ✅ Абзац о том, *почему этот путь, а не два других*
 
 ---
 
-## Rubric
+## Рубрика
 
-| Task | Points | Criteria |
+| Задача | Баллы | Критерии |
 |------|-------:|----------|
-| **Task 1** — Concepts | **2** | Guarantees, comparison table, headless DNS, operator rationale |
-| **Task 2** — StatefulSet | **3** | Hand-written `statefulset.yaml` with serviceName + label triangle + volumeClaimTemplates; 3 ordinal pods + 3 Bound PVCs |
-| **Task 3** — Headless Service & lifecycle | **2** | Hand-written headless Service (`clusterIP: None`); per-pod DNS proven; ordered start observed |
-| **Task 4** — Persistence proof | **2** | `web-1` marker survives delete; `web-0` ≠ `web-1`; per-pod isolation proven |
-| **Task 5** — Documentation | **1** | Six sections in `LAB15.md` with real evidence |
-| **Bonus** — Update strategies / operator | **2** | One of three paths implemented, defended in writing |
-| **Total** | **12** | 10 main + 2 bonus |
+| **Задача 1** — Концепции | **2** | Гарантии, таблица сравнения, headless DNS, обоснование оператора |
+| **Задача 2** — StatefulSet | **3** | Написанный вручную `statefulset.yaml` с serviceName + треугольником меток + volumeClaimTemplates; 3 порядковых pod'а + 3 Bound PVC |
+| **Задача 3** — Headless-сервис и жизненный цикл | **2** | Написанный вручную headless Service (`clusterIP: None`); DNS на каждый pod доказан; упорядоченный запуск наблюдался |
+| **Задача 4** — Доказательство персистентности | **2** | Маркер `web-1` переживает удаление; `web-0` ≠ `web-1`; изоляция на каждый pod доказана |
+| **Задача 5** — Документация | **1** | Шесть разделов в `LAB15.md` с реальными доказательствами |
+| **Бонус** — Стратегии обновления / оператор | **2** | Реализован один из трёх путей, обоснован письменно |
+| **Итого** | **12** | 10 основных + 2 бонусных |
 
-**Grading scale (main 10 pts):**
+**Шкала оценивания (основные 10 баллов):**
 
-- **10/10:** All resources correct, per-pod PVC binding proven on `web-1`, non-crossing demonstrated on `web-0`, documentation excellent
-- **8-9/10:** Works end-to-end; minor gaps in evidence or one weak explanation
-- **6-7/10:** StatefulSet deploys but persistence proof is thin (only one half — survives delete OR per-pod isolation, not both)
-- **<6/10:** Missing headless Service, broken `volumeClaimTemplates`, or no persistence proof
+- **10/10:** все ресурсы верны, привязка PVC на каждый pod доказана на `web-1`, непересечение продемонстрировано на `web-0`, документация отличная
+- **8–9/10:** работает end-to-end; незначительные пробелы в доказательствах или одно слабое объяснение
+- **6–7/10:** StatefulSet развёртывается, но доказательство персистентности слабое (только половина — переживает удаление ИЛИ изоляция на каждый pod, но не оба)
+- **<6/10:** отсутствует headless Service, сломан `volumeClaimTemplates` или нет доказательства персистентности
 
 ---
 
-## Resources
+## Ресурсы
 
 <details>
-<summary>📚 Kubernetes documentation</summary>
+<summary>📚 Документация Kubernetes</summary>
 
-- [StatefulSets — concepts](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/)
-- [StatefulSet Basics tutorial](https://kubernetes.io/docs/tutorials/stateful-application/basic-stateful-set/)
-- [Headless Services](https://kubernetes.io/docs/concepts/services-networking/service/#headless-services)
-- [Volume claim templates](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#volume-claim-templates)
-- [Update strategies & partition rollout](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#update-strategies)
+- [StatefulSets — концепции](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/)
+- [Учебник по основам StatefulSet](https://kubernetes.io/docs/tutorials/stateful-application/basic-stateful-set/)
+- [Headless-сервисы](https://kubernetes.io/docs/concepts/services-networking/service/#headless-services)
+- [Шаблоны volume claim](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#volume-claim-templates)
+- [Стратегии обновления и раскатка с partition](https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/#update-strategies)
 - [Persistent Volumes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)
-- [DNS for Services and Pods (per-pod records)](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pods)
+- [DNS для сервисов и pod'ов (записи на каждый pod)](https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pods)
 
 </details>
 
 <details>
-<summary>🤖 Operators & cloud-native storage</summary>
+<summary>🤖 Операторы и cloud-native-хранилища</summary>
 
-- [Operator pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/) · [OperatorHub.io](https://operatorhub.io/)
-- [CloudNativePG](https://cloudnative-pg.io/) — the PostgreSQL operator (1.29, PG 18.3 default)
-- [Strimzi](https://strimzi.io/) — Kafka on Kubernetes
-- [Rook](https://rook.io/) — production storage on Ceph (v1.18 + Ceph 19 Squid)
-- [Longhorn](https://longhorn.io/) — lightweight CNCF block storage (1.9)
-
-</details>
-
-<details>
-<summary>⚠️ Common Pitfalls (from real dry-runs — read these BEFORE you debug)</summary>
-
-- **Missing or wrong `spec.serviceName`.** The StatefulSet controller does **not** fail the apply — it happily creates pods with ordinal names, but per-pod DNS silently breaks because the `<pod>.<serviceName>` FQDN points at no Service. Symptom: pods Ready, but `kubectl exec web-0 -- getent hosts web-1.<wrong>` returns nothing. **Always pair the StatefulSet apply with the matching headless Service apply, and grep both files for the name match before committing.**
-
-- **`clusterIP: None` typo'd or omitted.** A regular Service with `clusterIP: <some-vip>` has the same shape as a headless one except for that single field. Drop it or set it to `""` and you get a regular VIP that load-balances — which silently defeats per-pod DNS, the whole point of this lab. There is **exactly one valid value**: the literal string `None`.
-
-- **`volumeClaimTemplates` PVCs persist after StatefulSet deletion — the bill-shock trap.** This is deliberate (your data outlives mistakes). It also means: `helm uninstall lab10-app -n lab15` leaves three PVCs sitting around, billing real money on a cloud StorageClass, with no obvious owner. Clean them up explicitly: `kubectl delete pvc -n lab15 -l app.kubernetes.io/name=lab10-app`. **The same trap applies when you fix the immutable `volumeClaimTemplates` block: `helm uninstall` does NOT wipe the PVCs; the next `helm install` may end up with mismatched claims.**
-
-- **Ordered pod startup blocks rolling updates when one pod fails liveness.** Default `podManagementPolicy: OrderedReady` means pod-N waits for pod-(N-1) to be Ready before starting. A wedged pod-0 → pods 1, 2, ... never start. Symptom looks like "the StatefulSet is stuck"; root cause is **always** in pod-0's logs/events. Don't reach for `Parallel` to bypass — fix pod-0. Use `Parallel` only when the app's discovery is gossip-based and every node is equal (Cassandra-style).
-
-- **busybox / slim images lack `nslookup` and `dig`.** Your Lab 2 Python image probably doesn't ship them either. Two clean ways to prove per-pod DNS without bloating the app image:
-  - `kubectl exec <pod> -- getent hosts <fqdn>` — works if the image has glibc (most non-busybox bases do)
-  - `kubectl run net-debug --rm -it --image=nicolaka/netshoot --restart=Never -- nslookup <fqdn>` — throwaway debug pod with full tools
-
-- **`volumeClaimTemplates` is immutable after creation.** Lecture 15 slide 19 calls this the resizing trap. Edit the block in your chart, `helm upgrade`, and the StatefulSet controller silently ignores the change. To actually resize: `kubectl edit pvc data-<sts>-N` for each ordinal — and only if the StorageClass has `allowVolumeExpansion: true` (the k3d `local-path` default *does* support it; many cloud SCs do too). For deeper changes (storage class, access mode) you must `kubectl delete sts --cascade=orphan` and re-apply with the new template — your PVCs survive the orphan delete.
-
-- **Label triangle drift.** Three places to keep in sync: `StatefulSet.spec.selector.matchLabels`, `StatefulSet.spec.template.metadata.labels`, and `Service.spec.selector` (on both the regular AND headless Services). The selector is **immutable after creation**. If you got it wrong, `helm uninstall`, `kubectl delete pvc -l ...`, then `helm install` — `kubectl edit` won't save you.
-
-- **Confusing `serviceName` with the regular Service.** Your StatefulSet's `serviceName` field points at the **headless** Service, not at the regular ClusterIP Service from Lab 9. They are different Services with different selectors satisfied by the same pods. The regular Service is for `curl http://web/` from anywhere in the cluster (load-balanced). The headless Service is for `curl http://web-0.web-headless/` to address a specific pod.
+- [Паттерн оператора](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/) · [OperatorHub.io](https://operatorhub.io/)
+- [CloudNativePG](https://cloudnative-pg.io/) — оператор PostgreSQL (1.29, по умолчанию PG 18.3)
+- [Strimzi](https://strimzi.io/) — Kafka в Kubernetes
+- [Rook](https://rook.io/) — production-хранилище на Ceph (v1.18 + Ceph 19 Squid)
+- [Longhorn](https://longhorn.io/) — лёгкое блочное хранилище CNCF (1.9)
 
 </details>
 
 <details>
-<summary>🛠️ Useful CLI (no YAML — recipes only)</summary>
+<summary>⚠️ Типичные ошибки (из реальных прогонов — прочитайте ДО отладки)</summary>
+
+- **Отсутствующий или неверный `spec.serviceName`.** Контроллер StatefulSet **не** проваливает apply — он с радостью создаёт pod'ы с порядковыми именами, но DNS на каждый pod незаметно ломается, потому что FQDN `<pod>.<serviceName>` указывает в никуда. Симптом: pod'ы Ready, но `kubectl exec web-0 -- getent hosts web-1.<wrong>` ничего не возвращает. **Всегда применяйте StatefulSet вместе с соответствующим headless-сервисом и перед коммитом проверьте grep'ом совпадение имён в обоих файлах.**
+
+- **`clusterIP: None` с опечаткой или пропущен.** Обычный Service с `clusterIP: <some-vip>` имеет ту же форму, что и headless, кроме этого единственного поля. Уберите его или поставьте `""` — и получите обычный VIP с балансировкой, что незаметно убивает DNS на каждый pod, весь смысл этой лабораторной. Есть **ровно одно допустимое значение**: буквальная строка `None`.
+
+- **PVC из `volumeClaimTemplates` сохраняются после удаления StatefulSet — ловушка шока от счёта.** Это сделано намеренно (ваши данные переживают ошибки). Это также значит: `helm uninstall lab10-app -n lab15` оставляет три PVC, которые продолжают стоить реальных денег на облачном StorageClass без очевидного владельца. Удаляйте их явно: `kubectl delete pvc -n lab15 -l app.kubernetes.io/name=lab10-app`. **Та же ловушка действует, когда вы исправляете неизменяемый блок `volumeClaimTemplates`: `helm uninstall` НЕ стирает PVC; следующий `helm install` может получить несовпадающие claim'ы.**
+
+- **Упорядоченный запуск pod'ов блокирует rolling-обновления, когда один pod проваливает liveness.** По умолчанию `podManagementPolicy: OrderedReady` означает, что pod-N ждёт, пока pod-(N-1) станет Ready, прежде чем запуститься. Заклинивший pod-0 → pod'ы 1, 2, ... никогда не стартуют. Симптом выглядит как «StatefulSet завис»; корневая причина **всегда** в логах/events pod-0. Не хватайтесь за `Parallel`, чтобы обойти это, — чините pod-0. Используйте `Parallel` только когда discovery приложения основан на сплетнях и все узлы равны (в стиле Cassandra).
+
+- **В busybox / slim-образах нет `nslookup` и `dig`.** В вашем Python-образе из лабораторной 2 их, вероятно, тоже нет. Два чистых способа доказать DNS на каждый pod, не раздувая образ приложения:
+  - `kubectl exec <pod> -- getent hosts <fqdn>` — работает, если в образе есть glibc (в большинстве баз не на busybox есть)
+  - `kubectl run net-debug --rm -it --image=nicolaka/netshoot --restart=Never -- nslookup <fqdn>` — одноразовый отладочный pod с полным набором инструментов
+
+- **`volumeClaimTemplates` неизменяем после создания.** Слайд 19 лекции 15 называет это ловушкой изменения размера. Отредактируйте блок в чарте, выполните `helm upgrade` — и контроллер StatefulSet незаметно проигнорирует изменение. Чтобы действительно изменить размер: `kubectl edit pvc data-<sts>-N` для каждого порядкового номера — и только если у StorageClass есть `allowVolumeExpansion: true` (стандартный `local-path` в k3d это *поддерживает*; многие облачные SC тоже). Для более глубоких изменений (storage class, режим доступа) нужно выполнить `kubectl delete sts --cascade=orphan` и применить заново с новым шаблоном — ваши PVC переживут orphan-удаление.
+
+- **Дрейф треугольника меток.** Три места, которые нужно держать в синхроне: `StatefulSet.spec.selector.matchLabels`, `StatefulSet.spec.template.metadata.labels` и `Service.spec.selector` (у обычного И headless-сервиса). Селектор **неизменяем после создания**. Если ошиблись — `helm uninstall`, `kubectl delete pvc -l ...`, затем `helm install`; `kubectl edit` не спасёт.
+
+- **Путаница `serviceName` с обычным Service.** Поле `serviceName` вашего StatefulSet указывает на **headless**-сервис, а не на обычный ClusterIP Service из лабораторной 9. Это разные Service с разными селекторами, которые удовлетворяются одними и теми же pod'ами. Обычный Service — для `curl http://web/` из любого места кластера (с балансировкой). Headless-сервис — для `curl http://web-0.web-headless/`, чтобы адресовать конкретный pod.
+
+</details>
+
+<details>
+<summary>🛠️ Полезный CLI (без YAML — только рецепты)</summary>
 
 ```bash
-# Inspect what the cluster offers before you write YAML
+# Посмотрите, что предлагает кластер, перед тем как писать YAML
 kubectl get storageclass
 kubectl get sc local-path -o yaml | grep -E 'provisioner|reclaimPolicy|volumeBindingMode|allowVolumeExpansion'
 
-# The four together tell the whole StatefulSet story
+# Эти четыре вместе рассказывают всю историю StatefulSet
 kubectl get sts,pod,pvc,svc -n lab15
 
-# Confirm per-pod PVC binding (the headline)
+# Подтвердите привязку PVC на каждый pod (главное)
 kubectl get pvc -n lab15 -l app.kubernetes.io/name=lab10-app
-# Expect: data-<sts>-0, data-<sts>-1, data-<sts>-2 — all Bound
+# Ожидается: data-<sts>-0, data-<sts>-1, data-<sts>-2 — все Bound
 
-# Per-pod DNS without nslookup
+# DNS на каждый pod без nslookup
 kubectl exec -n lab15 <sts>-0 -- getent hosts <sts>-1.<headless>.lab15.svc.cluster.local
-# Or with full tooling:
+# Или с полным набором инструментов:
 kubectl run net-debug --rm -it --image=nicolaka/netshoot --restart=Never -n lab15 -- bash
 
-# Persistence proof (Task 4)
+# Доказательство персистентности (задача 4)
 kubectl exec -n lab15 <sts>-1 -- sh -c 'echo "MARKER-$(date +%s)" > /data/marker'
 kubectl exec -n lab15 <sts>-1 -- cat /data/marker
 kubectl delete pod -n lab15 <sts>-1
 kubectl wait --for=condition=Ready pod/<sts>-1 -n lab15 --timeout=60s
-kubectl exec -n lab15 <sts>-1 -- cat /data/marker   # MUST match the value above
+kubectl exec -n lab15 <sts>-1 -- cat /data/marker   # ДОЛЖЕН совпадать со значением выше
 ```
 
 </details>
 
 ---
 
-## Looking Ahead
+## Взгляд вперёд
 
-| Lab | What it adds to this stack |
+| Лабораторная | Что она добавляет этому стеку |
 |---:|---|
-| 16 | **kube-prometheus-stack** — scrape per-pod metrics from your StatefulSet via a `ServiceMonitor` |
-| 17 *(bonus)* | **Cloudflare Workers** — when the cluster is overkill: V8 isolates, instant cold-start |
-| 18 *(bonus)* | **Nix** — reproducible builds and dev shells without a container in sight |
+| 16 | **kube-prometheus-stack** — сбор метрик каждого pod'а вашего StatefulSet через `ServiceMonitor` |
+| 17 *(бонус)* | **Cloudflare Workers** — когда кластер избыточен: изоляты V8, мгновенный cold-start |
+| 18 *(бонус)* | **Nix** — воспроизводимые сборки и dev-shell'ы без единого контейнера в поле зрения |
 
 ---
 
-**Good luck!** 💾
+**Удачи!** 💾
 
-> **Remember:** StatefulSets are *managed pets* — stable identity + per-pod storage. The whole lab boils down to one capture: write a marker to `web-1`, delete `web-1`, read the marker back from the new `web-1` — same value, because `data-web-1` was bound to ordinal 1, not to the pod that lived there. If only one capture survives the lab, make it that one.
+> **Помните:** StatefulSet'ы — это *управляемые питомцы*: стабильная идентичность + хранилище на каждый pod. Вся лабораторная сводится к одному снимку: записать маркер в `web-1`, удалить `web-1`, прочитать маркер из нового `web-1` — то же значение, потому что `data-web-1` был привязан к порядковому номеру 1, а не к pod'у, который там жил. Если после лабораторной сохранится только один снимок, пусть это будет он.

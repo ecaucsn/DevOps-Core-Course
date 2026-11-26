@@ -1,52 +1,52 @@
-# Lab 1 — DevOps Info Service: Web Application Development
+# Лабораторная 1 — DevOps Info Service: Разработка веб-приложения
 
 ![difficulty](https://img.shields.io/badge/difficulty-beginner-success)
 ![topic](https://img.shields.io/badge/topic-Web%20Development-blue)
 ![points](https://img.shields.io/badge/points-10%2B2-orange)
 ![languages](https://img.shields.io/badge/languages-Python%20|%20Go-informational)
 
-> **Goal:** Build the seed of your DevOps Info Service — a small HTTP service that reports its own metadata + the host it runs on. Every later lab grows this same service.
-> **Deliverable:** A PR from `lab01` with `app_python/` (and optionally `app_go/`). The image you build over the next 16 weeks starts here.
+> **Цель:** Создать основу вашего DevOps Info Service — небольшой HTTP-сервис, который сообщает собственные метаданные и сведения о хосте, на котором он работает. Каждая последующая лабораторная развивает этот же сервис.
+> **Результат сдачи:** PR из `lab01` с `app_python/` (и опционально `app_go/`). Образ, который вы соберёте за следующие 16 недель, начинается здесь.
 
 ---
 
-## Overview
+## Обзор
 
-In this lab you will practice:
-- Picking a Python web framework and justifying the choice
-- Reading host/runtime info from `platform`, `socket`, `os`
-- Wiring HTTP routes that return JSON (not HTML)
-- Pinning dependencies, configuring via environment variables, writing real docs
+В этой лабораторной работе вы отработаете:
+- Выбор Python веб-фреймворка и обоснование выбора
+- Чтение информации о хосте/среде выполнения из `platform`, `socket`, `os`
+- Настройку HTTP-маршрутов, возвращающих JSON (не HTML)
+- Фиксацию зависимостей, конфигурацию через переменные окружения, написание настоящей документации
 
-> ⚠️ **Scope:** no database, no auth, no Docker yet. That comes in Lab 2+. Don't get clever — keep the code short and obvious.
-
----
-
-## Project State
-
-**You should have from previous labs:**
-- Nothing — this is week 1.
-
-**This lab adds:**
-- `app_python/` — Python service with `GET /` (info) and `GET /health` (probe)
-- *(optional bonus)* `app_go/` — compiled-language sibling with the same endpoints
-
-By Lab 9 this service runs on Kubernetes; by Lab 13 ArgoCD deploys it. So the choices you make this week — framework, layout, env-var config — outlive Lab 1.
+> ⚠️ **Область:** пока без базы данных, без аутентификации, без Docker. Это появится в лабораторной 2+. Не мудрите — держите код коротким и очевидным.
 
 ---
 
-## Setup
+## Состояние проекта
 
-You need only:
+**У вас должно быть из предыдущих лабораторных:**
+- Ничего — это неделя 1.
+
+**Эта лабораторная добавляет:**
+- `app_python/` — Python-сервис с `GET /` (информация) и `GET /health` (проба)
+- *(опциональная бонусная задача)* `app_go/` — аналог на компилируемом языке с теми же эндпоинтами
+
+К лабораторной 9 этот сервис будет работать в Kubernetes; к лабораторной 13 его будет развёртывать ArgoCD. Поэтому решения, которые вы примете на этой неделе — фреймворк, структура, конфигурация через переменные окружения — переживут лабораторную 1.
+
+---
+
+## Подготовка
+
+Вам нужно только:
 
 ```bash
-python3 --version         # 3.12+ (course standardizes on 3.13)
+python3 --version         # 3.12+ (курс стандартизирован на 3.13)
 pip3 --version
 ```
 
-> 📝 **`python` vs `python3`**: on Debian/Ubuntu the binary is `python3`; on macOS/Windows it may be `python`. Pick whichever exists on your box — the rest of this lab writes `python app.py` for brevity, substitute `python3 app.py` if that's how your system spells it.
+> 📝 **`python` vs `python3`**: в Debian/Ubuntu бинарник называется `python3`; в macOS/Windows он может быть `python`. Выберите тот, который есть в вашей системе — далее в этой лабораторной для краткости пишется `python app.py`, подставляйте `python3 app.py`, если именно так называется бинарник в вашей системе.
 
-Create the directory layout (you'll fill the files yourself):
+Создайте структуру каталогов (файлы вы заполните сами):
 
 ```
 app_python/
@@ -55,292 +55,292 @@ app_python/
 ├── .gitignore
 ├── README.md
 ├── tests/
-│   └── __init__.py            # empty; tests come in Lab 3
+│   └── __init__.py            # пусто; тесты появятся в лабораторной 3
 └── docs/
-    └── LAB01.md               # your submission report
+    └── LAB01.md               # ваш отчёт о сдаче
 ```
 
 ---
 
-## Task 1 — Python Web Application (6 pts)
+## Задача 1 — Python веб-приложение (6 баллов)
 
-### 1.1 — Pick a framework and justify it
+### 1.1 — Выберите фреймворк и обоснуйте его
 
-You may use **Flask 3.1**, **FastAPI 0.136**, or **Django 5.2** (overkill for this; do it if you want the practice). In `docs/LAB01.md`, give your one-paragraph reasoning + a small comparison table covering at least: footprint, async support, OpenAPI/docs, learning curve.
+Вы можете использовать **Flask 3.1**, **FastAPI 0.136** или **Django 5.2** (избыточно для этой задачи; берите, если хотите попрактиковаться). В `docs/LAB01.md` приведите обоснование одним абзацем + небольшую сравнительную таблицу, охватывающую как минимум: размер, поддержку async, OpenAPI/документацию, кривую обучения.
 
-### 1.2 — `GET /` returns the full info JSON
+### 1.2 — `GET /` возвращает полный JSON с информацией
 
-`YOUR TASK`: write a handler at the root path that returns JSON with **five** top-level keys: `service`, `system`, `runtime`, `request`, `endpoints`.
+`ВАША ЗАДАЧА`: напишите обработчик по корневому пути, который возвращает JSON с **пятью** ключами верхнего уровня: `service`, `system`, `runtime`, `request`, `endpoints`.
 
-Requirements:
+Требования:
 
-- `service`: `name`, `version`, `description`, `framework` (your choice from 1.1)
+- `service`: `name`, `version`, `description`, `framework` (ваш выбор из 1.1)
 - `system`: `hostname`, `platform`, `platform_version`, `architecture`, `cpu_count`, `python_version`
-- `runtime`: `uptime_seconds` (int), `uptime_human` (e.g. `"1 hour, 3 minutes"`), `current_time` (ISO 8601 UTC), `timezone`
+- `runtime`: `uptime_seconds` (int), `uptime_human` (например, `"1 hour, 3 minutes"`), `current_time` (ISO 8601 UTC), `timezone`
 - `request`: `client_ip`, `user_agent`, `method`, `path`
-- `endpoints`: list of `{path, method, description}` for every route you publish
+- `endpoints`: список `{path, method, description}` для каждого публикуемого маршрута
 
-Hints:
+Подсказки:
 
-- `platform.system()`, `platform.machine()`, `platform.python_version()` cover most of `system`
-- `socket.gethostname()` for the hostname
-- Uptime = `datetime.now(timezone.utc) - START_TIME` captured at module import — be **timezone-aware** throughout (mixing naive + aware datetimes raises `TypeError`)
-- Per-framework request access: Flask → `request.remote_addr` / `request.headers.get('User-Agent')`; FastAPI → `request.client.host` / `request.headers.get('user-agent')`
+- `platform.system()`, `platform.machine()`, `platform.python_version()` покрывают большую часть `system`
+- `socket.gethostname()` для имени хоста
+- Uptime = `datetime.now(timezone.utc) - START_TIME`, захваченное при импорте модуля — **учитывайте часовой пояс** везде (смешивание naive и aware datetime вызывает `TypeError`)
+- Доступ к запросу во фреймворках: Flask → `request.remote_addr` / `request.headers.get('User-Agent')`; FastAPI → `request.client.host` / `request.headers.get('user-agent')`
 
 <details>
-<summary>💡 Stuck on the structure?</summary>
+<summary>💡 Застряли на структуре?</summary>
 
-Sketch — no Python code given, intentionally:
+Набросок — Python-код намеренно не приводится:
 
 ```
-imports → app object → constants (SERVICE_NAME, START_TIME, ...) → helper get_system_info() → helper get_uptime() → route handler returning the 5-key dict → error handlers → __main__ block
+импорты → объект app → константы (SERVICE_NAME, START_TIME, ...) → вспомогательная функция get_system_info() → вспомогательная функция get_uptime() → обработчик маршрута, возвращающий словарь из 5 ключей → обработчики ошибок → блок __main__
 ```
 
-Lecture 1 slide on the lifecycle, lecture 2 on configuration — both apply here.
+Слайд лекции 1 о жизненном цикле, лекции 2 о конфигурации — оба применимы здесь.
 
 </details>
 
-### 1.3 — `GET /health` returns a small JSON + HTTP 200
+### 1.3 — `GET /health` возвращает небольшой JSON + HTTP 200
 
-`YOUR TASK`: write a second handler that returns `{status, timestamp, uptime_seconds}` and status code **200**. This will be your Kubernetes liveness/readiness target in Lab 9 — keep it cheap (no DB calls, no external HTTP).
+`ВАША ЗАДАЧА`: напишите второй обработчик, который возвращает `{status, timestamp, uptime_seconds}` и код состояния **200**. Это будет вашей целью liveness/readiness проб в Kubernetes в лабораторной 9 — держите его дешёвым (без обращений к БД, без внешнего HTTP).
 
-### 1.4 — Configurable via environment variables
+### 1.4 — Конфигурация через переменные окружения
 
-`YOUR TASK`: read `HOST`, `PORT`, `DEBUG` from the environment with sensible defaults (`0.0.0.0`, `5000`, `False`). The app must run unchanged with:
+`ВАША ЗАДАЧА`: читайте `HOST`, `PORT`, `DEBUG` из окружения с разумными значениями по умолчанию (`0.0.0.0`, `5000`, `False`). Приложение должно работать без изменений при:
 
 ```bash
-python app.py                            # default 0.0.0.0:5000
-PORT=8080 python app.py                  # custom port
-HOST=127.0.0.1 PORT=3000 python app.py   # both
+python app.py                            # по умолчанию 0.0.0.0:5000
+PORT=8080 python app.py                  # пользовательский порт
+HOST=127.0.0.1 PORT=3000 python app.py   # оба
 ```
 
-Hint: cast `PORT` to `int` and `DEBUG` to `bool` by **lowercase string comparison** (`os.getenv("DEBUG","False").lower() == "true"`) — `bool("False")` is `True` in Python; that's the easy way to ship a debug-mode bug to production.
+Подсказка: приводите `PORT` к `int`, а `DEBUG` к `bool` через **сравнение строк в нижнем регистре** (`os.getenv("DEBUG","False").lower() == "true"`) — `bool("False")` в Python равно `True`; это простой способ отправить баг с режимом отладки в продакшен.
 
-### 1.5 — Error handlers and logging
+### 1.5 — Обработчики ошибок и логирование
 
-`YOUR TASK`: register handlers for **404** and **500** that return JSON (matching the rest of the API), and configure stdlib `logging` at INFO level with a format including timestamp/level. Don't `print()`.
+`ВАША ЗАДАЧА`: зарегистрируйте обработчики для **404** и **500**, возвращающие JSON (в стиле остального API), и настройте стандартный `logging` на уровне INFO с форматом, включающим время/уровень. Не используйте `print()`.
 
-### 1.6 — Proof of work
+### 1.6 — Доказательство выполнения
 
-**Paste into `docs/LAB01.md`:**
+**Вставьте в `docs/LAB01.md`:**
 
-- Four CLI captures, with the **exact commands** you ran:
-  - `curl -s http://localhost:5000/ | jq .` — full JSON, your real hostname + uptime
+- Четыре снимка вывода CLI с **точными командами**, которые вы выполнили:
+  - `curl -s http://localhost:5000/ | jq .` — полный JSON, ваше реальное имя хоста + uptime
   - `curl -s http://localhost:5000/health | jq .`
-  - `curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:5000/nope` — proves the 404 handler
-  - `PORT=8080 python app.py` started in another shell + a `curl` showing the new port served — proves env-var config
-- The framework comparison table from 1.1
-- 2–3 sentences on the biggest gotcha you hit and how you solved it
+  - `curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:5000/nope` — доказывает работу обработчика 404
+  - `PORT=8080 python app.py`, запущенный в другой оболочке + `curl`, показывающий, что обслуживается новый порт — доказывает конфигурацию через переменные окружения
+- Сравнительную таблицу фреймворков из 1.1
+- 2–3 предложения о самой большой подводной камене, на которую вы наткнулись, и о том, как вы её решили
 
 <details>
-<summary>💡 Hints if you're stuck</summary>
+<summary>💡 Подсказки, если вы застряли</summary>
 
-- Make the framework choice early — switching mid-lab burns time.
-- Build `GET /` last. Build `GET /health` first (5 lines), then incrementally add system info, uptime, request info.
-- If JSON output looks "weird" (e.g., bytes prefix `b'...'`), you're returning a string instead of a dict — let the framework jsonify.
+- Сделайте выбор фреймворка пораньше — переключение посреди лабораторной сжигает время.
+- Реализуйте `GET /` последним. Сначала сделайте `GET /health` (5 строк), затем постепенно добавляйте системную информацию, uptime, информацию о запросе.
+- Если вывод JSON выглядит «странно» (например, байтовый префикс `b'...'`), вы возвращаете строку вместо словаря — позвольте фреймворку выполнить jsonify.
 
 </details>
 
 ---
 
-## Task 2 — Documentation & Best Practices (4 pts)
+## Задача 2 — Документация и лучшие практики (4 балла)
 
 ### 2.1 — `app_python/README.md`
 
-`YOUR TASK`: write the user-facing README with these sections (no fluff, prefer commands over prose):
+`ВАША ЗАДАЧА`: напишите пользовательский README со следующими разделами (без воды, предпочитайте команды прозе):
 
-1. **Overview** — one paragraph
-2. **Prerequisites** — Python version, OS
-3. **Installation** — `python -m venv venv` … `pip install -r requirements.txt`
-4. **Running** — default + custom-port examples
-5. **API Endpoints** — table of `Method | Path | Description`
-6. **Configuration** — table of env vars + defaults + purpose
+1. **Обзор** — один абзац
+2. **Требования** — версия Python, ОС
+3. **Установка** — `python -m venv venv` … `pip install -r requirements.txt`
+4. **Запуск** — примеры с портом по умолчанию + пользовательским портом
+5. **Эндпоинты API** — таблица `Method | Path | Description`
+6. **Конфигурация** — таблица переменных окружения + значений по умолчанию + назначения
 
-### 2.2 — Code-quality hygiene
+### 2.2 — Гигиена качества кода
 
-`YOUR TASK`: ship the things every Python service needs.
+`ВАША ЗАДАЧА`: поставьте то, что нужно каждому Python-сервису.
 
-| File | Must contain |
+| Файл | Должен содержать |
 |---|---|
-| `requirements.txt` | The framework **pinned to an exact patch** (e.g. `Flask==3.1.3`, not `Flask>=3`). One framework only — drop the rest. |
-| `.gitignore` | `__pycache__/`, `*.pyc`, `venv/`, `*.log`, IDE dirs (`.vscode/`, `.idea/`), `.DS_Store` |
-| Imports in `app.py` | Grouped (stdlib → third-party → local), PEP 8 compliant |
+| `requirements.txt` | Фреймворк, **закреплённый на точной патч-версии** (например, `Flask==3.1.3`, а не `Flask>=3`). Только один фреймворк — остальные уберите. |
+| `.gitignore` | `__pycache__/`, `*.pyc`, `venv/`, `*.log`, каталоги IDE (`.vscode/`, `.idea/`), `.DS_Store` |
+| Импорты в `app.py` | Сгруппированы (stdlib → сторонние → локальные), соответствие PEP 8 |
 
-### 2.3 — `app_python/docs/LAB01.md` — your submission report
+### 2.3 — `app_python/docs/LAB01.md` — ваш отчёт о сдаче
 
-Required sections, in order:
+Обязательные разделы, по порядку:
 
-1. **Framework Selection** — your choice + comparison table
-2. **Best Practices Applied** — bulleted list, each with one sentence of *why*
-3. **API Documentation** — request + response example per endpoint
-4. **Testing Evidence** — the four CLI captures from 1.6
-5. **Challenges & Solutions** — at least one real one (not "I was new to Python")
-6. **GitHub Community** — one paragraph; see 2.4
+1. **Выбор фреймворка** — ваш выбор + сравнительная таблица
+2. **Применённые лучшие практики** — маркированный список, каждый пункт с одним предложением о том, *почему*
+3. **Документация API** — пример запроса + ответа для каждого эндпоинта
+4. **Свидетельства тестирования** — четыре снимка CLI из 1.6
+5. **Проблемы и решения** — как минимум одна настоящая (не «я был новичком в Python»)
+6. **GitHub-сообщество** — один абзац; см. 2.4
 
-### 2.4 — GitHub community engagement
+### 2.4 — Участие в GitHub-сообществе
 
-This is the social half of being a developer. The actions are public on your profile.
+Это социальная половина работы разработчика. Действия видны публично в вашем профиле.
 
-`YOUR TASK`:
-1. **Star** the course repository.
-2. **Star** the [simple-container-com/api](https://github.com/simple-container-com/api) project — a promising open-source tool for container management.
-3. **Follow** your professor and TAs on GitHub:
-   - Professor: [@Cre-eD](https://github.com/Cre-eD)
+`ВАША ЗАДАЧА`:
+1. **Поставьте звезду** репозиторию курса.
+2. **Поставьте звезду** проекту [simple-container-com/api](https://github.com/simple-container-com/api) — перспективному open-source инструменту для управления контейнерами.
+3. **Подпишитесь** на преподавателя и ассистентов (TA) на GitHub:
+   - Преподаватель: [@Cre-eD](https://github.com/Cre-eD)
    - TA: [@Naghme98](https://github.com/Naghme98)
    - TA: [@pierrepicaud](https://github.com/pierrepicaud)
-4. **Follow** ≥ 3 classmates from this course.
-5. In your `docs/LAB01.md` "GitHub Community" section, **put your GitHub username on the first line** (so the TA can verify your stars/follows in <30s) then write 2–3 sentences answering: *Why does starring a project actually help its maintainers? What concrete benefit do you get from following other developers?* — your own words, not the lecture's.
+4. **Подпишитесь** на ≥ 3 однокурсников с этого курса.
+5. В разделе «GitHub Community» файла `docs/LAB01.md` **укажите свой GitHub-username в первой строке** (чтобы TA смог проверить ваши звёзды/подписки за <30 с), затем напишите 2–3 предложения с ответом: *Почему звёзды на проекте действительно помогают его мейнтейнерам? Какую конкретную пользу вы получаете, подписываясь на других разработчиков?* — своими словами, не из лекции.
 
-### 2.5 — Proof of work
+### 2.5 — Доказательство выполнения
 
-**Paste into `docs/LAB01.md`:**
+**Вставьте в `docs/LAB01.md`:**
 
-- The `docs/LAB01.md` itself satisfies all six required sections — that *is* the proof.
-- Output of `find app_python -maxdepth 2 -type f | sort` showing every required file is present.
+- Сам `docs/LAB01.md` удовлетворяет всем шести обязательным разделам — это *и есть* доказательство.
+- Вывод `find app_python -maxdepth 2 -type f | sort`, показывающий наличие каждого требуемого файла.
 
 ---
 
-## Bonus Task — Compiled-Language Sibling (2 pts)
+## Бонусная задача — Аналог на компилируемом языке (2 балла)
 
-Re-implement the same service in a **compiled language**, in a sibling directory (e.g. `app_go/`).
+Реализуйте тот же сервис заново на **компилируемом языке** в соседнем каталоге (например, `app_go/`).
 
-Why bother? Lab 2's multi-stage Docker bonus shrinks a Go service from ~900 MB to ~15 MB — that doesn't work without a static binary to start with.
+Зачем это нужно? Бонус с многоэтапной сборкой Docker в лабораторной 2 уменьшает Go-сервис с ~900 МБ до ~15 МБ — это не сработает без статического бинарника на старте.
 
-`YOUR TASK`:
+`ВАША ЗАДАЧА`:
 
-- Same two endpoints (`/`, `/health`)
-- Same JSON shape as your Python version (so the same `curl` calls work against both)
-- A README in the sibling dir explaining build + run
-- A `go.mod` (and `go.sum` if you pull deps) — Lab 2's bonus needs them as the build context
-- In `docs/LAB01.md`, add a one-line **artifact size** for both. Measure the same way for each so the comparison is apples-to-apples:
-  - Python: `du -sh app_python/venv` (the venv carries everything beyond the interpreter)
-  - Compiled: `ls -lh app_go/<binary>` (the single static binary)
-  - The size delta is the whole point. The real Docker-image comparison comes in Lab 2.
+- Те же два эндпоинта (`/`, `/health`)
+- Та же структура JSON, что в вашей Python-версии (чтобы одни и те же вызовы `curl` работали с обеими)
+- README в соседнем каталоге с описанием сборки + запуска
+- `go.mod` (и `go.sum`, если подтягиваете зависимости) — они нужны для бонуса лабораторной 2 как контекст сборки
+- В `docs/LAB01.md` добавьте одну строку с **размером артефакта** для обоих. Измеряйте одинаково для каждого, чтобы сравнение было честным:
+  - Python: `du -sh app_python/venv` (venv содержит всё, что сверх интерпретатора)
+  - Компилируемый: `ls -lh app_go/<binary>` (единственный статический бинарник)
+  - Разница в размерах — это и есть суть. Настоящее сравнение Docker-образов будет в лабораторной 2.
 
-Choose one of:
+Выберите один из:
 
-| Language | Idiomatic HTTP | Notes |
+| Язык | Идиоматичный HTTP | Примечания |
 |---|---|---|
-| **Go** *(recommended)* | `net/http` | Single static binary; instant compile; smallest distroless image later |
-| Rust | `actix-web` / `axum` | Strong types; longer compile; great for the security-minded |
-| Java + Spring Boot | `spring-boot-starter-web` | Industry-standard for enterprise — heavier runtime |
-| C# + ASP.NET Core | `WebApplication.Create` | Cross-platform .NET; comparable to Java but newer ergonomics |
+| **Go** *(рекомендуется)* | `net/http` | Единственный статический бинарник; мгновенная компиляция; наименьший distroless-образ в дальнейшем |
+| Rust | `actix-web` / `axum` | Строгая типизация; дольше компиляция; отлично для тех, кто думает о безопасности |
+| Java + Spring Boot | `spring-boot-starter-web` | Отраслевой стандарт для enterprise — тяжелее среда выполнения |
+| C# + ASP.NET Core | `WebApplication.Create` | Кроссплатформенный .NET; сопоставим с Java, но новее эргономика |
 
-Hints (no full code):
+Подсказки (без полного кода):
 
-- For Go, `runtime.NumCPU()`, `runtime.GOOS`, `runtime.GOARCH`, `os.Hostname()` mirror Python's `os`/`platform`. JSON keys differ in casing — use struct tags (`json:"hostname"`) to keep the same wire shape.
-- For Java/C#, start from `spring init` / `dotnet new web` — don't hand-write `pom.xml`/`csproj`.
+- Для Go `runtime.NumCPU()`, `runtime.GOOS`, `runtime.GOARCH`, `os.Hostname()` повторяют Python-овские `os`/`platform`. Ключи JSON отличаются по регистру — используйте теги структур (`json:"hostname"`), чтобы сохранить ту же форму данных.
+- Для Java/C# начинайте с `spring init` / `dotnet new web` — не пишите `pom.xml`/`csproj` вручную.
 
 ---
 
-## How to Submit
+## Как сдавать
 
 ```bash
 git switch -c lab01
 git add app_python/
-git add app_go/                   # only if you did the bonus
+git add app_go/                   # только если вы делали бонус
 git commit -m "feat(lab01): devops info service — python (+ go bonus)"
 git push -u origin lab01
 ```
 
-Open **two** PRs:
+Откройте **два** PR:
 
-- `your-fork:lab01` → `course-repo:master` *(reviewed)*
-- `your-fork:lab01` → `your-fork:master` *(merges into your own main when done)*
+- `your-fork:lab01` → `course-repo:master` *(проверяется)*
+- `your-fork:lab01` → `your-fork:master` *(сливается в ваш собственный main по завершении)*
 
-PR checklist:
+Чек-лист PR:
 
 ```text
-- [ ] Task 1 done — /, /health, env config, error handlers, logging
-- [ ] Task 2 done — README, requirements.txt, .gitignore, docs/LAB01.md, GitHub social
-- [ ] Bonus done — app_go/ (or other) with same endpoints + size comparison
+- [ ] Задача 1 выполнена — /, /health, конфигурация через окружение, обработчики ошибок, логирование
+- [ ] Задача 2 выполнена — README, requirements.txt, .gitignore, docs/LAB01.md, социальная активность на GitHub
+- [ ] Бонус выполнен — app_go/ (или другой) с теми же эндпоинтами + сравнение размеров
 ```
 
 ---
 
-## Acceptance Criteria
+## Критерии приёмки
 
-### Task 1 (6 pts)
-- ✅ Service starts with `python app.py` and serves on `0.0.0.0:5000`
-- ✅ `GET /` returns HTTP 200 with all five top-level keys populated from *your real machine*
-- ✅ `GET /health` returns HTTP 200 with the three required fields
-- ✅ 404 handler returns JSON (not HTML)
-- ✅ `PORT` env var overrides the port
-- ✅ Logging is configured (you'll see startup log line in stdout)
+### Задача 1 (6 баллов)
+- ✅ Сервис запускается через `python app.py` и обслуживает на `0.0.0.0:5000`
+- ✅ `GET /` возвращает HTTP 200 со всеми пятью ключами верхнего уровня, заполненными с *вашей реальной машины*
+- ✅ `GET /health` возвращает HTTP 200 с тремя требуемыми полями
+- ✅ Обработчик 404 возвращает JSON (не HTML)
+- ✅ Переменная окружения `PORT` переопределяет порт
+- ✅ Логирование настроено (вы увидите строку стартового лога в stdout)
 
-### Task 2 (4 pts)
-- ✅ `README.md` has all six sections
-- ✅ `requirements.txt` pins an **exact** version
-- ✅ `.gitignore` covers Python + IDE + OS artifacts
-- ✅ `docs/LAB01.md` has all six sections including the GitHub Community paragraph
-- ✅ Stars + follows visible on student's GitHub profile
+### Задача 2 (4 балла)
+- ✅ В `README.md` есть все шесть разделов
+- ✅ `requirements.txt` закрепляет **точную** версию
+- ✅ `.gitignore` охватывает артефакты Python + IDE + ОС
+- ✅ В `docs/LAB01.md` есть все шесть разделов, включая абзац о GitHub-сообществе
+- ✅ Звёзды + подписки видны в GitHub-профиле студента
 
-### Bonus Task (2 pts)
-- ✅ Sibling app builds and serves the same two endpoints
-- ✅ Wire-compatible JSON (same `curl … | jq` works against both)
-- ✅ Artifact-size comparison documented (`du -sh venv` vs `ls -lh <binary>`)
-- ✅ Build manifest present (`go.mod` / `Cargo.toml` / `pom.xml` / `*.csproj`) so Lab 2's bonus has a build context to `COPY`
+### Бонусная задача (2 балла)
+- ✅ Соседнее приложение собирается и обслуживает те же два эндпоинта
+- ✅ JSON совместим на уровне протокола (тот же `curl … | jq` работает с обоими)
+- ✅ Сравнение размеров артефактов задокументировано (`du -sh venv` против `ls -lh <binary>`)
+- ✅ Манифест сборки присутствует (`go.mod` / `Cargo.toml` / `pom.xml` / `*.csproj`), чтобы у бонуса лабораторной 2 был контекст сборки для `COPY`
 
 ---
 
-## Rubric
+## Рубрика
 
-| Task | Points | Criteria |
+| Задача | Баллы | Критерии |
 |------|-------:|----------|
-| **Task 1** — Python web app | **6** | Both routes correct, env-var config, error handlers, logging |
-| **Task 2** — Docs & hygiene | **4** | All file/section requirements met; pinned deps; complete LAB01.md |
-| **Bonus** — Compiled sibling | **2** | Same endpoints, wire-compatible JSON, size comparison |
-| **Total** | **12** | 10 main + 2 bonus |
+| **Задача 1** — Python веб-приложение | **6** | Оба маршрута корректны, конфигурация через переменные окружения, обработчики ошибок, логирование |
+| **Задача 2** — Документация и гигиена | **4** | Все требования к файлам/разделам выполнены; закреплённые зависимости; полный LAB01.md |
+| **Бонус** — Аналог на компилируемом языке | **2** | Те же эндпоинты, совместимый JSON, сравнение размеров |
+| **Итого** | **12** | 10 основных + 2 бонусных |
 
 ---
 
-## Resources
+## Ресурсы
 
 <details>
-<summary>📚 Documentation</summary>
+<summary>📚 Документация</summary>
 
-- [Flask 3.1](https://flask.palletsprojects.com/en/latest/) — the canonical micro-framework
-- [FastAPI](https://fastapi.tiangolo.com/) — async, OpenAPI free
-- [Django 5.2](https://docs.djangoproject.com/en/stable/) — full-stack; overkill for this lab
+- [Flask 3.1](https://flask.palletsprojects.com/en/latest/) — каноничный микрофреймворк
+- [FastAPI](https://fastapi.tiangolo.com/) — async, OpenAPI бесплатно
+- [Django 5.2](https://docs.djangoproject.com/en/stable/) — full-stack; избыточно для этой лабораторной
 - [Python `platform`](https://docs.python.org/3/library/platform.html) / [`socket`](https://docs.python.org/3/library/socket.html)
 - [PEP 8](https://pep8.org/), [PEP 660](https://peps.python.org/pep-0660/)
 
 </details>
 
 <details>
-<summary>⚠️ Common Pitfalls (from real dry-runs)</summary>
+<summary>⚠️ Частые ошибки (из реальных прогонов)</summary>
 
-- **Naive vs aware datetimes** — `datetime.now() - START_TIME` raises `TypeError` if one is timezone-aware and the other isn't. Pick one (use `datetime.now(timezone.utc)` everywhere) and stay there.
-- **`bool("False") == True`** — never write `DEBUG = bool(os.getenv("DEBUG", "False"))`. Use a lowercase string compare.
-- **Flask 3 deprecation warning** on `flask.__version__` — use `importlib.metadata.version("flask")` if you need to print the framework version.
-- **Returning a dict directly from FastAPI vs Flask** — FastAPI auto-serializes; Flask needs `jsonify(...)`. Don't return a bare dict from a Flask handler.
-- **`socket.gethostname()` inside a container** later returns the container ID, not your laptop name — that's correct, not a bug. You'll see it again in Lab 2.
-- **Port 5000 occupied on macOS** — macOS Monterey+ runs the *AirPlay Receiver* on `:5000`. The Flask default conflicts; you'll see your `curl` hit Apple's service instead. Either turn AirPlay Receiver off (System Settings → General → AirDrop & Handoff) or pick `PORT=5050` for your default run.
-- **`pip install -r requirements.txt` outside the venv** — installs Flask system-wide, then `python app.py` may still pick up a stale Flask elsewhere. Always activate the venv (`source venv/bin/activate`) before `pip install` and before `python app.py`.
-- **Don't return a Response from `@app.errorhandler`'s default** — Flask's 500 handler must return a tuple `(body, status)`. Returning a bare `jsonify(...)` sends HTTP 200 with the error JSON — a subtle bug that breaks the Lab 9 probe later.
+- **Naive и aware datetime** — `datetime.now() - START_TIME` вызывает `TypeError`, если один учитывает часовой пояс, а другой нет. Выберите один вариант (используйте `datetime.now(timezone.utc)` везде) и придерживайтесь его.
+- **`bool("False") == True`** — никогда не пишите `DEBUG = bool(os.getenv("DEBUG", "False"))`. Используйте сравнение строк в нижнем регистре.
+- **Предупреждение об устаревании во Flask 3** на `flask.__version__` — используйте `importlib.metadata.version("flask")`, если нужно вывести версию фреймворка.
+- **Возврат словаря напрямую из FastAPI и Flask** — FastAPI сериализует автоматически; Flask требует `jsonify(...)`. Не возвращайте «голый» словарь из обработчика Flask.
+- **`socket.gethostname()` внутри контейнера** в дальнейшем вернёт ID контейнера, а не имя вашего ноутбука — это правильно, а не баг. Вы снова увидите это в лабораторной 2.
+- **Порт 5000 занят в macOS** — macOS Monterey+ запускает *AirPlay Receiver* на `:5000`. Значение Flask по умолчанию конфликтует; ваш `curl` вместо этого попадёт в сервис Apple. Либо отключите AirPlay Receiver (System Settings → General → AirDrop & Handoff), либо выберите `PORT=5050` для запуска по умолчанию.
+- **`pip install -r requirements.txt` вне venv** — устанавливает Flask глобально, затем `python app.py` может всё ещё подхватить устаревший Flask в другом месте. Всегда активируйте venv (`source venv/bin/activate`) перед `pip install` и перед `python app.py`.
+- **Не возвращайте Response из обработчика `@app.errorhandler` по умолчанию** — обработчик 500 во Flask должен возвращать кортеж `(body, status)`. Возврат «голого» `jsonify(...)` отправляет HTTP 200 с JSON ошибки — тонкий баг, который позже сломает пробу в лабораторной 9.
 
 </details>
 
 <details>
-<summary>🛠️ Dev tools worth knowing</summary>
+<summary>🛠️ Инструменты разработчика, которые стоит знать</summary>
 
-- [jq](https://jqlang.github.io/jq/) — JSON CLI; `curl ... | jq .` is your friend
-- [HTTPie](https://httpie.io/) — friendlier than `curl` for ad-hoc testing
-- [Ruff](https://docs.astral.sh/ruff/) — fast Python linter (used in Lab 3 CI)
+- [jq](https://jqlang.github.io/jq/) — JSON CLI; `curl ... | jq .` — ваш друг
+- [HTTPie](https://httpie.io/) — дружелюбнее `curl` для быстрого тестирования
+- [Ruff](https://docs.astral.sh/ruff/) — быстрый Python-линтер (используется в CI лабораторной 3)
 
 </details>
 
 ---
 
-## Looking Ahead
+## Взгляд вперёд
 
-| Lab | What it adds to this service |
+| Лабораторная | Что добавляет к этому сервису |
 |---:|---|
-| 2 | Multi-stage Dockerfile, image scan, push to a registry |
-| 3 | CI: pytest + lint + image build + Trivy gate on every PR |
-| 7 / 8 | Structured JSON logs (Loki + Alloy) and a `/metrics` endpoint (Prometheus) |
-| 9 / 10 | Deploy to Kubernetes (k3d) + Helm 4 chart |
-| 11 / 12 | OpenBao for secrets, ConfigMaps + PVCs for state |
-| 13 / 14 | ArgoCD GitOps + canary rollouts |
+| 2 | Многоэтапный Dockerfile, сканирование образа, пуш в реестр |
+| 3 | CI: pytest + lint + сборка образа + Trivy-гейт на каждом PR |
+| 7 / 8 | Структурированные JSON-логи (Loki + Alloy) и эндпоинт `/metrics` (Prometheus) |
+| 9 / 10 | Развёртывание в Kubernetes (k3d) + Helm 4 чарт |
+| 11 / 12 | OpenBao для секретов, ConfigMaps + PVC для state |
+| 13 / 14 | ArgoCD GitOps + canary-развёртывания |
 
-Keep the code simple. You'll come back and rewrite parts of it; that's the point.
+Держите код простым. Вы вернётесь и перепишете его части; в этом и смысл.

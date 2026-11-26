@@ -1,11 +1,11 @@
-# 📌 Lecture 10 — Helm Package Management: Templating Kubernetes
+# 📌 Лекция 10 — Управление пакетами Helm: шаблонизация Kubernetes
 
-## 📍 Slide 1 – 📦 Welcome to Helm
+## 📍 Слайд 1 – 📦 Добро пожаловать в Helm
 
-* 🌍 **Lecture 9 left you with raw YAML** — a Deployment + Service per environment, copied and edited by hand. That scales to maybe two environments before it bites.
-* 📦 **Helm** = the package manager for Kubernetes. It bundles your manifests into a **chart**, parameterizes them with **values**, and tracks installs as **releases**.
-* 🎯 This lecture: write a chart, template it cleanly, and ship the same chart through dev/stage/prod with one value file change per environment.
-* 🔗 **Tie-in to Lab 10:** convert your Lab 9 manifests into a Helm chart, support 3 environments via values, add pre/post-install hooks, push the chart to GHCR as an OCI artifact.
+* 🌍 **Лекция 9 оставила вас с сырым YAML** — Deployment + Service на каждую среду, скопированные и отредактированные вручную. Это масштабируется примерно до двух сред, прежде чем начнёт кусаться.
+* 📦 **Helm** = менеджер пакетов для Kubernetes. Он упаковывает ваши манифесты в **chart**, параметризует их **values** и отслеживает установки как **релизы**.
+* 🎯 Эта лекция: написать chart, чисто его шаблонизировать и прокатить один и тот же chart через dev/stage/prod, меняя один файл values на каждую среду.
+* 🔗 **Связь с лабораторной 10:** преобразуйте ваши манифесты из лабораторной 9 в Helm chart, поддержите 3 среды через values, добавьте хуки pre/post-install, отправьте chart в GHCR как OCI-артефакт.
 
 ```mermaid
 flowchart LR
@@ -16,50 +16,50 @@ flowchart LR
 
 ---
 
-## 📍 Slide 2 – 🎯 Learning Outcomes
+## 📍 Слайд 2 – 🎯 Результаты обучения
 
-| # | Outcome |
+| # | Результат |
 |---|---------|
-| 1 | 🧱 Read & write Helm 4 chart structure: `Chart.yaml`, `values.yaml`, `templates/`, `_helpers.tpl`, `charts/` |
-| 2 | 🎨 Use Go templates + Sprig functions, named templates, `tpl`, `include` |
-| 3 | 🚦 Drive releases with `install / upgrade / rollback / uninstall / template / lint / test` |
-| 4 | 🌳 Compose charts with dependencies and library charts |
-| 5 | 🪝 Use hooks for pre-install / post-upgrade / pre-delete logic |
-| 6 | 🌐 Push and pull charts via OCI registry (GHCR) |
+| 1 | 🧱 Читать и писать структуру chart'а Helm 4: `Chart.yaml`, `values.yaml`, `templates/`, `_helpers.tpl`, `charts/` |
+| 2 | 🎨 Использовать шаблоны Go + функции Sprig, именованные шаблоны, `tpl`, `include` |
+| 3 | 🚦 Управлять релизами с помощью `install / upgrade / rollback / uninstall / template / lint / test` |
+| 4 | 🌳 Компоновать chart'ы с зависимостями и library chart'ами |
+| 5 | 🪝 Использовать хуки для логики pre-install / post-upgrade / pre-delete |
+| 6 | 🌐 Отправлять и забирать chart'ы через OCI-реестр (GHCR) |
 
-**Tech stack pinned for May 2026:** **Helm 4.1.4** (released April 8 2026). Helm 3 is in support mode through July 8 2026 (bug fixes) / November 11 2026 (security only). New work uses Helm 4.
-
----
-
-## 📍 Slide 3 – ❓ Why Helm Exists
-
-You wrote three manifests in Lab 9 (Deployment, Service, ConfigMap). Now imagine:
-* 🌳 Three environments — dev, staging, prod — each needs different replica counts, image tags, resource limits
-* 🔁 Twelve services — same shape, different names
-
-**Without Helm:** copy-and-edit YAML, eyeball diffs, hope no env drifts. Fails by service 4.
-
-**With Helm:** *one* set of templates, *one* `values.yaml` per environment, one command per install. Templates render to YAML; Helm pushes through `kubectl apply`.
-
-> 🔥 **Hot take:** Helm is not the only K8s templating tool (Kustomize, Jsonnet, cdk8s, Carvel ytt). It's the most popular by ~5x because charts are *shareable artifacts* — `helm pull oci://…` and you have someone else's working stack.
+**Технологический стек, зафиксированный на май 2026:** **Helm 4.1.4** (выпущен 8 апреля 2026). Helm 3 находится в режиме поддержки до 8 июля 2026 (исправления ошибок) / 11 ноября 2026 (только безопасность). Новая работа использует Helm 4.
 
 ---
 
-## 📍 Slide 4 – 📜 Helm Evolution: 1 → 2 → 3 → 4
+## 📍 Слайд 3 – ❓ Зачем существует Helm
 
-* 📅 **2015** — Helm 1 created by Deis (acquired by Microsoft 2017). Client-side templating only.
-* 📅 **2016** — Helm 2 introduces **Tiller** — an in-cluster server-side component. Loved for power, hated for cluster-wide RBAC.
-* 📅 **2019** — Helm 3 **drops Tiller**, stores release state in K8s Secrets/ConfigMaps. The default everyone uses today.
-* 📅 **2022** — OCI registries become first-class for chart distribution (charts pushed/pulled like Docker images).
-* 📅 **2026 (Apr 8)** — Helm **4.1.4** released. Backwards-compatible chart format for `apiVersion: v2`; engine rewrites + better dependency resolution + WASM plugin support.
+Вы написали три манифеста в лабораторной 9 (Deployment, Service, ConfigMap). Теперь представьте:
+* 🌳 Три среды — dev, staging, prod — каждой нужны разные количества реплик, теги образов, лимиты ресурсов
+* 🔁 Двенадцать сервисов — одинаковая форма, разные имена
 
-> 📝 **Migration story:** most Helm 3 charts work unmodified on Helm 4. Helm 3's CLI is still available; expect both in shops through mid-2026. The labs in this course use Helm 4.
+**Без Helm:** копируйте-и-правьте YAML, глазами сравнивайте diffs, надейтесь, что ни одна среда не разъедется. Терпит крах уже на 4-м сервисе.
+
+**С Helm:** *один* набор шаблонов, *один* `values.yaml` на среду, одна команда на установку. Шаблоны рендерятся в YAML; Helm проталкивает их через `kubectl apply`.
+
+> 🔥 **Смелое утверждение:** Helm — не единственный инструмент шаблонизации K8s (Kustomize, Jsonnet, cdk8s, Carvel ytt). Он самый популярный примерно в 5 раз, потому что chart'ы — это *разделяемые артефакты* — `helm pull oci://…` и у вас есть чужой рабочий стек.
 
 ---
 
-## 📍 Slide 5 – 🧱 Chart Anatomy
+## 📍 Слайд 4 – 📜 Эволюция Helm: 1 → 2 → 3 → 4
 
-A chart is a directory with this shape:
+* 📅 **2015** — Helm 1 создан Deis (приобретён Microsoft в 2017). Только клиентская шаблонизация.
+* 📅 **2016** — Helm 2 вводит **Tiller** — внутрикластерный серверный компонент. Любим за мощь, ненавидим за RBAC на весь кластер.
+* 📅 **2019** — Helm 3 **отбрасывает Tiller**, хранит состояние релиза в K8s Secrets/ConfigMaps. То, что все используют сегодня по умолчанию.
+* 📅 **2022** — OCI-реестры становятся первоклассными для распространения chart'ов (chart'ы отправляются/забираются как Docker-образы).
+* 📅 **2026 (8 апреля)** — выпущен Helm **4.1.4**. Обратно совместимый формат chart'а для `apiVersion: v2`; переписанный движок + лучшее разрешение зависимостей + поддержка плагинов WASM.
+
+> 📝 **История миграции:** большинство chart'ов Helm 3 работают без изменений на Helm 4. CLI Helm 3 всё ещё доступен; ожидайте оба в компаниях до середины 2026. Лабораторные в этом курсе используют Helm 4.
+
+---
+
+## 📍 Слайд 5 – 🧱 Анатомия chart'а
+
+Chart — это каталог такой формы:
 
 ```
 mychart/
@@ -79,14 +79,14 @@ mychart/
 └── README.md
 ```
 
-Key rules:
-* 📁 Files starting with `_` are **partials** — included via `{{ include ... }}`, never rendered as standalone YAML
-* 🧪 Files in `templates/tests/` run only on `helm test <release>`
-* 🔒 Anything under `charts/` is a vendored subchart (managed by `helm dependency update`)
+Ключевые правила:
+* 📁 Файлы, начинающиеся с `_`, — это **partials** — включаются через `{{ include ... }}`, никогда не рендерятся как самостоятельный YAML
+* 🧪 Файлы в `templates/tests/` выполняются только при `helm test <release>`
+* 🔒 Всё под `charts/` — это вендоренный subchart (управляется через `helm dependency update`)
 
 ---
 
-## 📍 Slide 6 – 📇 Chart.yaml
+## 📍 Слайд 6 – 📇 Chart.yaml
 
 ```yaml
 apiVersion: v2                # ⚠️ Helm 3+; Helm 4 reads v2; v1 is Helm 2 (deprecated)
@@ -104,14 +104,14 @@ dependencies:
     condition: postgresql.enabled
 ```
 
-* 🎯 **Two versions** matter: `version` (the chart YOU publish) and `appVersion` (the image it deploys). They evolve independently.
-* 🔧 `type: library` charts contribute only `_helpers.tpl` templates — they don't install anything themselves.
+* 🎯 **Две версии** имеют значение: `version` (chart, который ВЫ публикуете) и `appVersion` (образ, который он развёртывает). Они развиваются независимо.
+* 🔧 Chart'ы с `type: library` предоставляют только шаблоны `_helpers.tpl` — они сами ничего не устанавливают.
 
 ---
 
-## 📍 Slide 7 – 🎨 Go Templates + Sprig
+## 📍 Слайд 7 – 🎨 Шаблоны Go + Sprig
 
-Helm uses Go's `text/template` package + the **Sprig** function library (~200 extra helpers).
+Helm использует пакет Go `text/template` + библиотеку функций **Sprig** (~200 дополнительных помощников).
 
 ```yaml
 apiVersion: apps/v1
@@ -136,20 +136,20 @@ spec:
           {{- end }}
 ```
 
-Common idioms:
-* `{{ include "name" . }}` — invoke a named template (better than `template` because it returns a string you can pipe)
-* `| nindent N` — indent a block by N spaces *after* a newline (the most common formatting bug fix)
-* `| default X` — fallback when the value is absent
-* `{{- ... -}}` — strip whitespace on the left/right of the action
-* `{{ toYaml . | nindent N }}` — render a structure as YAML
+Распространённые идиомы:
+* `{{ include "name" . }}` — вызвать именованный шаблон (лучше, чем `template`, потому что возвращает строку, которую можно передать по конвейеру)
+* `| nindent N` — сделать отступ блока на N пробелов *после* новой строки (самое частое исправление ошибок форматирования)
+* `| default X` — запасное значение, когда значение отсутствует
+* `{{- ... -}}` — удалить пробелы слева/справа от действия
+* `{{ toYaml . | nindent N }}` — отрендерить структуру как YAML
 
-> 🔥 **The #1 Helm bug:** indentation. `nindent` (newline + indent) is what you want 90% of the time. `indent` produces invalid YAML if the action is on its own line.
+> 🔥 **Баг Helm №1:** отступы. `nindent` (новая строка + отступ) — это то, что вам нужно в 90% случаев. `indent` даёт невалидный YAML, если действие находится на отдельной строке.
 
 ---
 
-## 📍 Slide 8 – 🛠️ `_helpers.tpl` — Named Templates Done Right
+## 📍 Слайд 8 – 🛠️ `_helpers.tpl` — именованные шаблоны, сделанные правильно
 
-Avoid copy-pasting label blocks. Define once, include everywhere.
+Избегайте копипаста блоков меток. Определите один раз, включайте везде.
 
 ```handlebars
 {{/*
@@ -172,11 +172,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 ```
 
-Selector labels are a strict subset of `.labels` because **Service/Deployment selectors are immutable after creation**. Don't put `version` in selector labels or you'll break rolling updates.
+Селекторные метки — строгое подмножество `.labels`, потому что **селекторы Service/Deployment неизменяемы после создания**. Не помещайте `version` в селекторные метки, иначе сломаете раскатку обновлений.
 
 ---
 
-## 📍 Slide 9 – 🚦 The Release Lifecycle
+## 📍 Слайд 9 – 🚦 Жизненный цикл релиза
 
 ```bash
 helm install web ./mychart -n dev \
@@ -196,14 +196,14 @@ helm lint ./mychart                          # 🔍 syntax + schema check
 helm test web -n dev                         # 🧪 run templates/tests/ pods
 ```
 
-* 📜 Every `install` and `upgrade` creates a **revision** stored as a `helm.sh/release.v1` Secret in the release's namespace. `helm rollback` is just "apply the manifests from revision N".
-* 🔍 `helm template` is the gateway to GitOps: render once, commit the YAML, let ArgoCD apply.
+* 📜 Каждый `install` и `upgrade` создаёт **ревизию**, хранящуюся как Secret `helm.sh/release.v1` в пространстве имён релиза. `helm rollback` — это просто "применить манифесты из ревизии N".
+* 🔍 `helm template` — это шлюз к GitOps: отрендерить один раз, закоммитить YAML, позволить ArgoCD применить.
 
 ---
 
-## 📍 Slide 10 – 🌳 Multi-Environment via Values Hierarchy
+## 📍 Слайд 10 – 🌳 Мультисредовость через иерархию values
 
-The flexible pattern is a base `values.yaml` + an override per environment.
+Гибкий паттерн — базовый `values.yaml` + переопределение на каждую среду.
 
 ```yaml
 # values.yaml (defaults)
@@ -235,16 +235,16 @@ ingress:
 helm upgrade --install web ./mychart -n prod -f values.yaml -f values-prod.yaml
 ```
 
-Order of precedence (lowest → highest):
-1. `values.yaml` (chart default)
-2. `-f file.yaml` (later files override earlier)
-3. `--set key=value` (explicit on CLI)
+Порядок приоритета (от низшего → к высшему):
+1. `values.yaml` (по умолчанию в chart'е)
+2. `-f file.yaml` (последующие файлы переопределяют предыдущие)
+3. `--set key=value` (явно в CLI)
 
 ---
 
-## 📍 Slide 11 – 🪝 Hooks: pre-install, post-upgrade, …
+## 📍 Слайд 11 – 🪝 Хуки: pre-install, post-upgrade, …
 
-Hooks let you run a Job, Pod, or any resource at a specific point in the release lifecycle.
+Хуки позволяют запускать Job, Pod или любой ресурс в определённой точке жизненного цикла релиза.
 
 ```yaml
 apiVersion: batch/v1
@@ -265,18 +265,18 @@ spec:
           command: ["python", "manage.py", "migrate"]
 ```
 
-Common hook points: `pre-install`, `post-install`, `pre-upgrade`, `post-upgrade`, `pre-delete`, `post-delete`, `test`.
+Распространённые точки хуков: `pre-install`, `post-install`, `pre-upgrade`, `post-upgrade`, `pre-delete`, `post-delete`, `test`.
 
-`hook-weight` orders multiple hooks (lower runs first; ties broken alphabetically).
-`hook-delete-policy` controls cleanup: `before-hook-creation` (default), `hook-succeeded`, `hook-failed`.
+`hook-weight` упорядочивает несколько хуков (меньшее значение выполняется первым; при равенстве — по алфавиту).
+`hook-delete-policy` управляет очисткой: `before-hook-creation` (по умолчанию), `hook-succeeded`, `hook-failed`.
 
-> ⚠️ **Hook gotcha:** hook resources are *not* tracked in the release — `helm uninstall` won't delete a hook Job. Use `hook-delete-policy: hook-succeeded` for cleanup.
+> ⚠️ **Ловушка хуков:** ресурсы хуков *не* отслеживаются в релизе — `helm uninstall` не удалит Job-хук. Используйте `hook-delete-policy: hook-succeeded` для очистки.
 
 ---
 
-## 📍 Slide 12 – 📦 Dependencies & Subcharts
+## 📍 Слайд 12 – 📦 Зависимости и subchart'ы
 
-Charts can depend on other charts. Run `helm dependency update` to fetch them into `charts/`.
+Chart'ы могут зависеть от других chart'ов. Запустите `helm dependency update`, чтобы загрузить их в `charts/`.
 
 ```yaml
 # Chart.yaml
@@ -297,13 +297,13 @@ postgresql:                          # 🎚️ subchart values nest under its al
     database: lab10
 ```
 
-Helm 4 added improved dependency resolution — multiple charts can pull the same transitive dep without conflicts.
+Helm 4 добавил улучшенное разрешение зависимостей — несколько chart'ов могут тянуть одну и ту же транзитивную зависимость без конфликтов.
 
 ---
 
-## 📍 Slide 13 – 📚 Library Charts
+## 📍 Слайд 13 – 📚 Library chart'ы
 
-A chart with `type: library` contributes only `_helpers.tpl` templates. Use it when 10 application charts share boilerplate (labels, security context, image-pull secrets).
+Chart с `type: library` предоставляет только шаблоны `_helpers.tpl`. Используйте его, когда 10 прикладных chart'ов делят boilerplate (метки, security context, секреты для pull образов).
 
 ```yaml
 # common-lib/Chart.yaml
@@ -326,13 +326,13 @@ dependencies:
 {{ include "common-lib.labels" . | nindent 4 }}    # 🔁 reused from the library
 ```
 
-> 🔗 **Lab 10 bonus** asks you to extract `_helpers.tpl` into a library chart and consume it from your app chart.
+> 🔗 **Бонус лабораторной 10** просит вас вынести `_helpers.tpl` в library chart и использовать его из прикладного chart'а.
 
 ---
 
-## 📍 Slide 14 – 🌐 OCI Registries — Charts as OCI Artifacts
+## 📍 Слайд 14 – 🌐 OCI-реестры — chart'ы как OCI-артефакты
 
-Since 2022, Helm pushes charts to OCI registries (same protocol as Docker images). GHCR / Docker Hub / Harbor / ECR all support OCI artifacts.
+С 2022 года Helm отправляет chart'ы в OCI-реестры (тот же протокол, что и Docker-образы). GHCR / Docker Hub / Harbor / ECR — все поддерживают OCI-артефакты.
 
 ```bash
 # 📦 Package
@@ -348,18 +348,18 @@ helm push mychart-1.3.0.tgz oci://ghcr.io/innodevops/charts
 helm install web oci://ghcr.io/innodevops/charts/mychart --version 1.3.0
 ```
 
-> 🔥 **Why OCI:** one auth model, one registry, one set of access controls for images *and* charts. Drops the legacy `helm repo add` HTTP indexing model.
+> 🔥 **Почему OCI:** одна модель аутентификации, один реестр, один набор средств контроля доступа для образов *и* chart'ов. Отбрасывает устаревшую модель HTTP-индексации `helm repo add`.
 
 ---
 
-## 📍 Slide 15 – 🧪 Testing Charts
+## 📍 Слайд 15 – 🧪 Тестирование chart'ов
 
-* 🔍 `helm lint ./mychart` — schema + YAML parse check
-* 📐 `values.schema.json` — JSON Schema validates `values.yaml`. Helm errors out before install if values are wrong.
-* 🧪 `helm template ./mychart | kubectl apply --dry-run=server -f -` — server-side validation
-* ✅ `helm test <release>` — runs Pods in `templates/tests/` against the live release
+* 🔍 `helm lint ./mychart` — проверка схемы + разбора YAML
+* 📐 `values.schema.json` — JSON Schema валидирует `values.yaml`. Helm выдаёт ошибку до установки, если values неверны.
+* 🧪 `helm template ./mychart | kubectl apply --dry-run=server -f -` — серверная валидация
+* ✅ `helm test <release>` — запускает Pod'ы в `templates/tests/` против живого релиза
 
-A typical `templates/tests/test-connection.yaml`:
+Типичный `templates/tests/test-connection.yaml`:
 ```yaml
 apiVersion: v1
 kind: Pod
@@ -377,60 +377,60 @@ spec:
 
 ---
 
-## 📍 Slide 16 – 🚫 Anti-Patterns and Common Bugs
+## 📍 Слайд 16 – 🚫 Антипаттерны и частые баги
 
-1. ❌ **Hard-coding image tags in templates** — put them in `values.yaml` so upgrades flow through `--set image.tag=...`
-2. ❌ **`indent` instead of `nindent`** — produces invalid YAML when the action is on its own line
-3. ❌ **Mutable selector labels** — once a Deployment exists, K8s rejects selector changes; use a stable subset
-4. ❌ **Skipping `helm lint` in CI** — every chart change should fail CI on lint error
-5. ❌ **Hooks that don't clean up** — set `hook-delete-policy: hook-succeeded` or you accumulate failed Jobs
-6. ❌ **Putting secrets in `values.yaml`** — git-tracked. Use **OpenBao + the secrets injector** (Lab 11) or `helm secrets` plugin
-7. ❌ **One huge umbrella chart for 12 services** — each service should have its own chart; share via library chart
-8. ❌ **Using `latest` in `appVersion`** — kills reproducibility. Pin a SemVer or git SHA.
-
----
-
-## 📍 Slide 17 – 🌍 Helm in the Wild
-
-* 📦 **Artifact Hub** indexes **15,000+ Helm charts** across hundreds of publishers
-* 🏢 **Bitnami** ships production-grade charts for ~150 popular open-source apps (Postgres, MongoDB, Redis, RabbitMQ, Kafka …) — though IPO/license changes in 2024 led many to move to community forks
-* 🎬 **Netflix, Shopify, Spotify** all publish internal Helm charts as the standard packaging unit
-* 🪐 **Crossplane, ArgoCD, kube-prometheus-stack** are all distributed as Helm charts — the K8s ecosystem assumes you have Helm
-
-> 📊 **CNCF survey 2024:** Helm is the #1 K8s package manager by margin. The "K8s deployment story" is still mostly Helm + ArgoCD + Kustomize in 2026.
+1. ❌ **Хардкодинг тегов образов в шаблонах** — помещайте их в `values.yaml`, чтобы обновления шли через `--set image.tag=...`
+2. ❌ **`indent` вместо `nindent`** — даёт невалидный YAML, когда действие находится на отдельной строке
+3. ❌ **Изменяемые селекторные метки** — как только Deployment существует, K8s отклоняет изменения селектора; используйте стабильное подмножество
+4. ❌ **Пропуск `helm lint` в CI** — каждое изменение chart'а должно валить CI при ошибке lint
+5. ❌ **Хуки, которые не убирают за собой** — задавайте `hook-delete-policy: hook-succeeded`, иначе накопите неудачные Job'ы
+6. ❌ **Помещение секретов в `values.yaml`** — файл отслеживается git. Используйте **OpenBao + injector секретов** (лабораторная 11) или плагин `helm secrets`
+7. ❌ **Один огромный umbrella chart на 12 сервисов** — у каждого сервиса должен быть свой chart; делитесь через library chart
+8. ❌ **Использование `latest` в `appVersion`** — убивает воспроизводимость. Закрепите SemVer или git SHA.
 
 ---
 
-## 📍 Slide 18 – 🎯 Key Takeaways
+## 📍 Слайд 17 – 🌍 Helm в реальном мире
 
-1. 📦 **Helm = templating + packaging + release lifecycle** — three jobs in one tool
-2. 🧱 **Chart structure is rigid** — `Chart.yaml`, `values.yaml`, `templates/`, `_helpers.tpl`. Memorize.
-3. 🎨 **Go templates + Sprig + named templates** — `nindent`, `include`, `default` cover 80% of use cases
-4. 🌳 **One chart, N value files** — the multi-environment story; never copy-edit YAML
-5. 🪝 **Hooks** run Jobs/Pods at lifecycle moments — set `hook-delete-policy` to clean up
-6. 📚 **Library charts** share helpers across application charts
-7. 🌐 **OCI artifacts** are the modern distribution path — same registry as your images
-8. ✅ **`helm lint` + `values.schema.json` + `helm template` in CI** — catch errors before the cluster does
+* 📦 **Artifact Hub** индексирует **15 000+ Helm chart'ов** от сотен издателей
+* 🏢 **Bitnami** поставляет chart'ы продакшн-уровня для ~150 популярных open-source приложений (Postgres, MongoDB, Redis, RabbitMQ, Kafka …) — хотя IPO/изменения лицензий в 2024 заставили многих перейти на общественные форки
+* 🎬 **Netflix, Shopify, Spotify** публикуют внутренние Helm chart'ы как стандартную единицу упаковки
+* 🪐 **Crossplane, ArgoCD, kube-prometheus-stack** все распространяются как Helm chart'ы — экосистема K8s предполагает, что у вас есть Helm
 
-> 💡 **The Helm 4 reality:** the syntax you write today will install fine on Helm 3.x clusters too. Adopt Helm 4 now; you're already future-proof.
+> 📊 **Опрос CNCF 2024:** Helm — менеджер пакетов K8s №1 с большим отрывом. "История развёртывания в K8s" в 2026 всё ещё в основном Helm + ArgoCD + Kustomize.
 
 ---
 
-## 📍 Slide 19 – 🚀 What Comes Next
+## 📍 Слайд 18 – 🎯 Ключевые выводы
 
-**📚 Next lecture: *Secret Management with Kubernetes + OpenBao*** — because `values.yaml` is git-tracked and your DB password isn't.
+1. 📦 **Helm = шаблонизация + упаковка + жизненный цикл релиза** — три задачи в одном инструменте
+2. 🧱 **Структура chart'а жёсткая** — `Chart.yaml`, `values.yaml`, `templates/`, `_helpers.tpl`. Запомните.
+3. 🎨 **Шаблоны Go + Sprig + именованные шаблоны** — `nindent`, `include`, `default` покрывают 80% случаев использования
+4. 🌳 **Один chart, N файлов values** — история мультисредовости; никогда не копируйте-правьте YAML
+5. 🪝 **Хуки** запускают Job'ы/Pod'ы в моменты жизненного цикла — задавайте `hook-delete-policy` для очистки
+6. 📚 **Library chart'ы** делят помощники между прикладными chart'ами
+7. 🌐 **OCI-артефакты** — современный путь распространения — тот же реестр, что и ваши образы
+8. ✅ **`helm lint` + `values.schema.json` + `helm template` в CI** — ловите ошибки раньше, чем кластер
 
-* 🔐 K8s `Secret` — what it actually does (and doesn't)
-* 🪦 HashiCorp Vault → OpenBao migration (BSL fallout, August 2023)
+> 💡 **Реальность Helm 4:** синтаксис, который вы пишете сегодня, также отлично установится на кластерах Helm 3.x. Примите Helm 4 сейчас; вы уже защищены на будущее.
+
+---
+
+## 📍 Слайд 19 – 🚀 Что дальше
+
+**📚 Следующая лекция: *Управление секретами с Kubernetes + OpenBao*** — потому что `values.yaml` отслеживается git, а ваш пароль к БД — нет.
+
+* 🔐 K8s `Secret` — что он на самом деле делает (и не делает)
+* 🪦 Миграция HashiCorp Vault → OpenBao (последствия BSL, август 2023)
 * 🤖 External Secrets Operator (ESO)
-* 🎯 Vault Agent Injector for templated config
+* 🎯 Vault Agent Injector для шаблонизированного конфига
 
-**🔬 Lab 10 deliverables:**
-* Package your Lab 9 manifests into a `lab10-app` chart
-* Support `values-dev.yaml` / `values-staging.yaml` / `values-prod.yaml`
-* Add a pre-install hook for DB migration (even if fake)
-* Push the chart to GHCR via `helm push oci://`
-* Bonus 2 pts: extract `_helpers.tpl` into a library chart consumed by your app chart
+**🔬 Результаты лабораторной 10:**
+* Упаковать ваши манифесты из лабораторной 9 в chart `lab10-app`
+* Поддержать `values-dev.yaml` / `values-staging.yaml` / `values-prod.yaml`
+* Добавить pre-install хук для миграции БД (даже если фиктивный)
+* Отправить chart в GHCR через `helm push oci://`
+* Бонус 2 балла: вынести `_helpers.tpl` в library chart, используемый вашим прикладным chart'ом
 
 ```mermaid
 flowchart LR
@@ -439,18 +439,18 @@ flowchart LR
   Lab11 --> Lab12[💾 Lab 12: Config + Storage]
 ```
 
-> 🌊 From YAML to packages — one template at a time.
+> 🌊 От YAML к пакетам — по одному шаблону за раз.
 
 ---
 
-## 📚 Resources
+## 📚 Ресурсы
 
-* 📕 *Learning Helm* (2e, 2024) — Butcher, Farina, Dolitsky (O'Reilly). The canonical reference.
-* 📕 *Mastering Helm* — Sumesh Kumar (2023) — chart patterns
-* 🌐 [helm.sh/docs](https://helm.sh/docs/) — official docs (Helm 4)
-* 🌐 [helm.sh/docs/chart_best_practices](https://helm.sh/docs/chart_best_practices/) — chart authoring conventions
-* 🌐 [Artifact Hub](https://artifacthub.io/) — search public charts
-* 🌐 [Sprig functions](https://masterminds.github.io/sprig/) — the function reference you'll consult weekly
-* 🌐 [Helm 4 release notes](https://helm.sh/blog/) — what changed from 3
+* 📕 *Learning Helm* (2e, 2024) — Butcher, Farina, Dolitsky (O'Reilly). Канонический справочник.
+* 📕 *Mastering Helm* — Sumesh Kumar (2023) — паттерны chart'ов
+* 🌐 [helm.sh/docs](https://helm.sh/docs/) — официальные документы (Helm 4)
+* 🌐 [helm.sh/docs/chart_best_practices](https://helm.sh/docs/chart_best_practices/) — соглашения по написанию chart'ов
+* 🌐 [Artifact Hub](https://artifacthub.io/) — поиск публичных chart'ов
+* 🌐 [Sprig functions](https://masterminds.github.io/sprig/) — справочник функций, к которому вы будете обращаться еженедельно
+* 🌐 [Helm 4 release notes](https://helm.sh/blog/) — что изменилось по сравнению с 3
 
-**🎓 Quiz:** post-lecture quiz feeds the weeks 10-12 leaderboard window.
+**🎓 Квиз:** квиз после лекции идёт в зачёт окна лидерборда недель 10-12.

@@ -1,196 +1,196 @@
-# 📌 Lecture 3 — Continuous Integration: From "Merge Week" to Green on Every Push
+# 📌 Лекция 3 — Continuous Integration: от «недели слияний» к зелёному статусу на каждый пуш
 
-## 📍 Slide 1 – 🤖 Welcome to CI/CD
+## 📍 Слайд 1 – 🤖 Добро пожаловать в CI/CD
 
-* 🐳 Lecture 2 ended with an image that "works everywhere" — but only if you remember to rebuild, scan, and push it
-* 🤖 **Continuous Integration** makes that "if" a "when": every commit runs the same pipeline, on the same runner, with the same scanner
-* 🎯 This lecture: build the GitHub Actions workflow Lab 3 asks for — test → lint → scan → build → publish, gated on every PR
-* 🔗 **Lab 3 builds this exact workflow** for the Python service from Lab 1 and the image from Lab 2
+* 🐳 Лекция 2 закончилась образом, который «работает везде» — но только если вы не забудете пересобрать, просканировать и запушить его
+* 🤖 **Continuous Integration** превращает это «если» в «когда»: каждый коммит прогоняет один и тот же конвейер, на одном и том же раннере, с одним и тем же сканером
+* 🎯 Эта лекция: соберите workflow GitHub Actions, который требует лабораторная 3 — тест → линтинг → сканирование → сборка → публикация, с блокировкой на каждом PR
+* 🔗 **Лабораторная 3 строит именно этот workflow** для Python-сервиса из лабораторной 1 и образа из лабораторной 2
 
 ```mermaid
 flowchart LR
   Push[📤 git push] --> CI[🤖 GitHub Actions]
-  CI -->|✅| Image[🐳 GHCR image]
-  CI -->|❌| Block[🚫 PR blocked]
+  CI -->|✅| Image[🐳 Образ в GHCR]
+  CI -->|❌| Block[🚫 PR заблокирован]
 ```
 
-> 📚 **Frame:** CI is the bridge between "I changed code on my laptop" (Lec 1) and "this exact image runs in K8s" (Lec 9). Skip CI and the bridge is a leap of faith.
+> 📚 **Рамка:** CI — мост между «я изменил код на ноутбуке» (лекция 1) и «этот самый образ работает в K8s» (лекция 9). Пропустите CI — и мост превращается в прыжок веры.
 
 ---
 
-## 📍 Slide 2 – 🎯 Learning Outcomes
+## 📍 Слайд 2 – 🎯 Результаты обучения
 
-| # | Outcome |
+| # | Результат |
 |---|---------|
-| 1 | 🧠 Define CI, CD, and CDeploy in Humble & Farley's terms |
-| 2 | 🔺 Apply the test pyramid — unit-heavy, integration-thin, E2E-rare |
-| 3 | 📝 Read and write a GitHub Actions workflow from scratch |
-| 4 | 🛡️ Gate merges on Trivy vulnerability scans and required checks |
-| 5 | 🏷️ Choose SemVer vs CalVer and tag images accordingly |
-| 6 | ⚡ Diagnose slow CI — caching, matrices, path filters, concurrency |
+| 1 | 🧠 Определять CI, CD и CDeploy в терминах Хамбла и Фарли |
+| 2 | 🔺 Применять пирамиду тестирования — много unit, мало интеграционных, редкие E2E |
+| 3 | 📝 Читать и писать workflow GitHub Actions с нуля |
+| 4 | 🛡️ Блокировать слияния на сканированиях уязвимостей Trivy и обязательных проверках |
+| 5 | 🏷️ Выбирать SemVer или CalVer и тегировать образы соответственно |
+| 6 | ⚡ Диагностировать медленный CI — кэширование, матрицы, фильтры путей, concurrency |
 
 ---
 
-## 📍 Slide 3 – 🛠️ Tech Stack (Pinned for May 2026)
+## 📍 Слайд 3 – 🛠️ Технологический стек (закреплён на май 2026)
 
-| Component | Version | Why pinned |
+| Компонент | Версия | Почему закреплено |
 |-----------|--------:|------------|
-| Runner | `ubuntu-24.04` | LTS; `ubuntu-latest` rotates and breaks reproducibility |
-| `actions/checkout` | `@v4` | Node 20 runtime; v3 was deprecated Feb 2024 |
-| `actions/setup-python` | `@v5` | Built-in `cache: pip` keyed off `requirements.txt` |
-| `docker/build-push-action` | `@v6` | BuildKit + multi-platform; v5 EOL April 2025 |
-| `docker/metadata-action` | `@v5` | SemVer/CalVer/SHA tags in one step |
-| Trivy | `v0.69.3+` | ⚠️ Mar 2026 supply-chain attack (v0.69.4 malicious — see Slide 15); CVE DB updated daily; alternatives: Grype, Snyk (paid) |
-| Cosign | `2.4` | Sigstore client; image signing covered in DevSecOps elective |
-| pytest | `8.3+` | Python 3.13 compatible |
+| Раннер | `ubuntu-24.04` | LTS; `ubuntu-latest` меняется и ломает воспроизводимость |
+| `actions/checkout` | `@v4` | Среда выполнения Node 20; v3 устарел в феврале 2024 |
+| `actions/setup-python` | `@v5` | Встроенный `cache: pip` с ключом по `requirements.txt` |
+| `docker/build-push-action` | `@v6` | BuildKit + мультиплатформенность; v5 EOL в апреле 2025 |
+| `docker/metadata-action` | `@v5` | Теги SemVer/CalVer/SHA за один шаг |
+| Trivy | `v0.69.3+` | ⚠️ атака на цепочку поставок в марте 2026 (v0.69.4 вредоносна — см. слайд 15); база CVE обновляется ежедневно; альтернативы: Grype, Snyk (платно) |
+| Cosign | `2.4` | Клиент Sigstore; подпись образов рассматривается в элективе DevSecOps |
+| pytest | `8.3+` | Совместим с Python 3.13 |
 
-> 📌 **Pin actions to a major tag** (`@v4`), pin tools to a minor version, pin base images by digest in production. Lab 3 enforces the first two.
-
----
-
-## 📍 Slide 4 – ❓ The Big Question
-
-* 📊 **DORA 2024:** elite teams deploy on-demand, multiple times per day; low performers deploy less than once a month
-* 🐛 **Capers Jones (2012):** fixing a prod bug costs **30–100×** the cost of catching it in dev
-* 🔍 **Sonatype 2024:** 1 in 8 open-source downloads carries a known vulnerability — deps are the attack surface
-
-> 💬 *"If it hurts, do it more often."* — Martin Fowler, *Continuous Integration* (2006)
+> 📌 **Закрепляйте actions на мажорном теге** (`@v4`), инструменты — на минорной версии, базовые образы в продакшене — по digest. Лабораторная 3 требует первые два.
 
 ---
 
-## 📍 Slide 5 – 🔥 The Problem: Manual Testing Hell
+## 📍 Слайд 4 – ❓ Большой вопрос
 
-A team without CI looks like this:
+* 📊 **DORA 2024:** элитные команды развёртывают по требованию, несколько раз в день; отстающие — реже раза в месяц
+* 🐛 **Capers Jones (2012):** исправление бага в проде стоит **в 30–100 раз** дороже, чем обнаружение в dev
+* 🔍 **Sonatype 2024:** каждое 8-е скачивание open-source несёт известную уязвимость — зависимости и есть поверхность атаки
 
-* 📋 50-step manual checklist before each release
-* 🗓️ Releases monthly because each one takes a full day
-* 😴 The QA engineer forgot to test `/health` again
-* 💥 Production breaks; nobody can replay what was deployed
+> 💬 *«Если это больно, делайте это чаще»* — Мартин Фаулер, *Continuous Integration* (2006)
+
+---
+
+## 📍 Слайд 5 – 🔥 Проблема: ад ручного тестирования
+
+Команда без CI выглядит так:
+
+* 📋 50-шаговый ручной чек-лист перед каждым релизом
+* 🗓️ Релизы раз в месяц, потому что каждый занимает целый день
+* 😴 QA-инженер снова забыл протестировать `/health`
+* 💥 Продакшен ломается; никто не может воспроизвести, что было развёрнуто
 
 ```mermaid
 flowchart LR
-  Code[💻 Code] --> Wait[📅 Release window] --> Manual[📋 Checklist] --> Deploy[🙏 Deploy] --> War[🔥 War room]
+  Code[💻 Код] --> Wait[📅 Окно релиза] --> Manual[📋 Чек-лист] --> Deploy[🙏 Развёртывание] --> War[🔥 Ситуационный штаб]
 ```
 
-> 📖 Lecture 1 named this *Manual Release Hell*. CI is the practice that retires it.
+> 📖 Лекция 1 назвала это *адом ручных релизов*. CI — практика, которая его упраздняет.
 
 ---
 
-## 📍 Slide 6 – 💥 The Integration Problem ("Merge Week")
+## 📍 Слайд 6 – 💥 Проблема интеграции («неделя слияний»)
 
-Before CI, integrating long-lived branches was a scheduled event:
+До CI интеграция долгоживущих веток была плановым событием:
 
-* 🌿 Five devs on feature branches for **3 weeks**
-* 📅 "Integration Friday" — everyone merges into `main` at once
-* 🔀 Hours of conflict resolution; nobody understands the diffs
-* 💀 `main` broken for a week; nobody can ship
+* 🌿 Пять разработчиков в feature-ветках **3 недели**
+* 📅 «Пятница интеграции» — все сливаются в `main` одновременно
+* 🔀 Часы разрешения конфликтов; никто не понимает диффы
+* 💀 `main` сломан неделю; никто не может выпускать
 
-> 📖 Kent Beck (*Extreme Programming*, 1999) prescribed the cure: **integrate at least daily**. Humble & Farley codified it in *Continuous Delivery* (2010).
+> 📖 Кент Бек (*Extreme Programming*, 1999) прописал лекарство: **интегрируйтесь как минимум ежедневно**. Хамбл и Фарли закрепили это в *Continuous Delivery* (2010).
 
-**The fix:** small commits, trunk-based development, every push validated by CI.
-
----
-
-## 📍 Slide 7 – 🔓 The Security Gap
-
-Lecture 2 ended with `trivy image`. Run it once, by hand, and you'll forget — and a CVE published next Tuesday won't ring any bells.
-
-* 🔍 **Sonatype 2024:** average enterprise app pulls **180+ open-source dependencies**
-* ⏱️ Median time-to-detect a vulnerable dep without scanning: **218 days** (Snyk *State of Open Source 2024*)
-* 🤖 **GitGuardian 2024:** leaked credentials in public repos are found by scanner bots in **under 5 minutes**
-
-> 🔥 **CI is where security shifts left** — the scan runs on every PR, not "when we have time".
+**Исправление:** маленькие коммиты, trunk-based development, каждый пуш валидируется CI.
 
 ---
 
-## 📍 Slide 8 – 💡 What CI/CD Actually Is
+## 📍 Слайд 7 – 🔓 Пробел в безопасности
 
-Three terms, often conflated. Humble & Farley's *Continuous Delivery* (2010) draws the lines:
+Лекция 2 закончилась на `trivy image`. Запустите его один раз вручную — и забудете, а CVE, опубликованная в следующий вторник, ни о чём не напомнит.
 
-| Term | Definition | Trigger |
+* 🔍 **Sonatype 2024:** среднее корпоративное приложение тянет **180+ open-source зависимостей**
+* ⏱️ Медианное время обнаружения уязвимой зависимости без сканирования: **218 дней** (Snyk *State of Open Source 2024*)
+* 🤖 **GitGuardian 2024:** утёкшие учётные данные в публичных репозиториях находят сканирующие боты **менее чем за 5 минут**
+
+> 🔥 **CI — это место, где безопасность сдвигается влево** — сканирование идёт на каждом PR, а не «когда будет время».
+
+---
+
+## 📍 Слайд 8 – 💡 Что такое CI/CD на самом деле
+
+Три термина, которые часто путают. *Continuous Delivery* Хамбла и Фарли (2010) проводит границы:
+
+| Термин | Определение | Триггер |
 |------|------------|---------|
-| 🤖 **Continuous Integration** | Every commit is built and tested in a shared trunk | Push / PR |
-| 📦 **Continuous Delivery** | Every passing commit is **deployable** at any time | Merge to `main` |
-| 🚀 **Continuous Deployment** | Every passing commit is **automatically deployed** to prod | Merge to `main` |
+| 🤖 **Continuous Integration** | Каждый коммит собирается и тестируется в общем стволе | Пуш / PR |
+| 📦 **Continuous Delivery** | Каждый прошедший коммит **готов к развёртыванию** в любой момент | Слияние в `main` |
+| 🚀 **Continuous Deployment** | Каждый прошедший коммит **автоматически развёртывается** в прод | Слияние в `main` |
 
 ```mermaid
 flowchart LR
-  Commit[📝 Commit] --> CI[🤖 CI: test+build]
-  CI -->|deployable| CDel[📦 CD: ready]
-  CDel -->|manual gate| Prod1[🚀 Prod]
-  CDel -->|auto| Prod2[🚀 Auto-deploy]
+  Commit[📝 Коммит] --> CI[🤖 CI: тест+сборка]
+  CI -->|развёртываемо| CDel[📦 CD: готово]
+  CDel -->|ручное подтверждение| Prod1[🚀 Прод]
+  CDel -->|авто| Prod2[🚀 Авторазвёртывание]
 ```
 
-> 📖 Jez Humble: *"Continuous Delivery is not Continuous Deployment. The difference is who pushes the button."*
+> 📖 Джез Хамбл: *«Continuous Delivery — это не Continuous Deployment. Разница в том, кто нажимает кнопку»*.
 
 ---
 
-## 📍 Slide 9 – 🔄 Pipeline Anatomy
+## 📍 Слайд 9 – 🔄 Анатомия конвейера
 
-Every modern CI pipeline has the same skeleton — Lab 3 builds the boxed steps:
+У каждого современного CI-конвейера один и тот же скелет — лабораторная 3 строит шаги в рамках:
 
 ```mermaid
 flowchart LR
-  Push[📤 Push] --> Lint[🔍 Lint]
-  Lint --> Test[🧪 Unit tests]
-  Test --> Scan[🛡️ Vuln scan]
-  Scan --> Build[🐳 Build image]
-  Build --> Publish[📦 Push to GHCR]
-  Publish -.->|Lab 13| Deploy[🚀 Deploy]
+  Push[📤 Push] --> Lint[🔍 Линтинг]
+  Lint --> Test[🧪 Unit-тесты]
+  Test --> Scan[🛡️ Сканирование уязвимостей]
+  Scan --> Build[🐳 Сборка образа]
+  Build --> Publish[📦 Пуш в GHCR]
+  Publish -.->|лабораторная 13| Deploy[🚀 Развёртывание]
 ```
 
-* 🔍 **Lint** — `ruff` / `flake8` / `pylint`. Seconds.
-* 🧪 **Test** — `pytest` against Lab 1's endpoints. Tens of seconds.
-* 🛡️ **Scan** — Trivy or Grype on deps and image. ~1 min.
-* 🐳 **Build** — Lab 2's multi-stage Dockerfile, BuildKit cached.
-* 📦 **Publish** — GHCR (free for public, GitHub-native, `GITHUB_TOKEN`).
+* 🔍 **Линтинг** — `ruff` / `flake8` / `pylint`. Секунды.
+* 🧪 **Тесты** — `pytest` против эндпоинтов лабораторной 1. Десятки секунд.
+* 🛡️ **Сканирование** — Trivy или Grype по зависимостям и образу. ~1 мин.
+* 🐳 **Сборка** — многоэтапный Dockerfile из лабораторной 2, с кэшем BuildKit.
+* 📦 **Публикация** — GHCR (бесплатно для публичных, нативно в GitHub, `GITHUB_TOKEN`).
 
-> 🔗 Deploy (dashed) is Lecture 13 / Lab 13 — ArgoCD watches the registry.
+> 🔗 Развёртывание (пунктир) — это лекция 13 / лабораторная 13 — ArgoCD следит за реестром.
 
 ---
 
-## 📍 Slide 10 – 🔺 The Testing Pyramid
+## 📍 Слайд 10 – 🔺 Пирамида тестирования
 
-Mike Cohn's pyramid (*Succeeding with Agile*, 2009) is still the model:
+Пирамида Майка Кона (*Succeeding with Agile*, 2009) до сих пор остаётся моделью:
 
 ```mermaid
 flowchart TD
-  E2E[🌐 E2E — few, slow, brittle]
-  INT[🔗 Integration — moderate]
-  UNIT[🧪 Unit — many, fast, deterministic]
+  E2E[🌐 E2E — мало, медленно, хрупко]
+  INT[🔗 Интеграционные — умеренно]
+  UNIT[🧪 Unit — много, быстро, детерминированно]
   E2E --- INT
   INT --- UNIT
 ```
 
-| Layer | Share | Speed | Catches |
+| Слой | Доля | Скорость | Что ловит |
 |-------|------:|------:|---------|
-| 🧪 Unit | ~70% | ms | Logic bugs in pure functions |
-| 🔗 Integration | ~20% | seconds | Wrong HTTP status, DB query shape |
-| 🌐 E2E | ~10% | minutes | Cross-service flows, UI |
+| 🧪 Unit | ~70% | мс | Логические баги в чистых функциях |
+| 🔗 Интеграционные | ~20% | секунды | Неверный HTTP-статус, форма запроса к БД |
+| 🌐 E2E | ~10% | минуты | Сквозные потоки между сервисами, UI |
 
-> ⚠️ **Inverted pyramid (E2E-heavy) = slow, flaky CI.** Google's *Testing Blog* calls it the *ice-cream cone* anti-pattern. Lab 3 stays at the unit layer; integration tests appear in Lab 7+.
+> ⚠️ **Перевёрнутая пирамида (упор на E2E) = медленный, нестабильный CI.** *Testing Blog* Google называет это антипаттерном *рожок мороженого*. Лабораторная 3 остаётся на уровне unit; интеграционные тесты появляются в лабораторной 7+.
 
 ---
 
-## 📍 Slide 11 – 📝 GitHub Actions Workflow Anatomy
+## 📍 Слайд 11 – 📝 Анатомия workflow GitHub Actions
 
-A workflow is a YAML file under `.github/workflows/`. Read these keys top-to-bottom:
+Workflow — это YAML-файл в `.github/workflows/`. Читайте эти ключи сверху вниз:
 
 ```yaml
-name: Python CI                    # 👁️ shown in the Actions tab
-on:                                # ⚡ triggers
+name: Python CI                    # 👁️ показывается на вкладке Actions
+on:                                # ⚡ триггеры
   push: { branches: [main] }
   pull_request:
-permissions:                       # 🔒 minimum required
+permissions:                       # 🔒 минимально необходимое
   contents: read
-  packages: write                  # for GHCR push
-concurrency:                       # ♻️ cancel superseded runs on the same PR
+  packages: write                  # для пуша в GHCR
+concurrency:                       # ♻️ отменять устаревшие запуски по тому же PR
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    runs-on: ubuntu-24.04          # 📌 pinned, not :latest
+    runs-on: ubuntu-24.04          # 📌 закреплено, не :latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -200,22 +200,22 @@ jobs:
       - run: pytest -q
 ```
 
-> 📌 **Pin actions to a major tag** (`@v4`). Pinning to `@main` lets an upstream compromise silently land in your CI (cf. **tj-actions/changed-files** supply-chain attack, **March 14-15, 2025**, **CVE-2025-30066** — 23,000+ repos leaked secrets in CI logs; fixed in v46.0.1).
+> 📌 **Закрепляйте actions на мажорном теге** (`@v4`). Закрепление на `@main` позволяет компрометации выше по цепочке тихо попасть в ваш CI (ср. атака на цепочку поставок **tj-actions/changed-files**, **14–15 марта 2025**, **CVE-2025-30066** — 23 000+ репозиториев утекли секреты в логи CI; исправлено в v46.0.1).
 
 ---
 
-## 📍 Slide 12 – 🧩 Jobs, Steps, Needs, Matrices
+## 📍 Слайд 12 – 🧩 Jobs, steps, needs, матрицы
 
-* 🧱 **Workflow** → many **jobs** → many **steps**
-* 🧱 **Jobs run in parallel** by default; sequence them with `needs:`
-* 🧱 **Each job is a fresh VM** — files don't carry between jobs unless you `upload-artifact`/`download-artifact`
-* 🧱 **Matrices** fan out one job over many parameters
+* 🧱 **Workflow** → много **jobs** → много **steps**
+* 🧱 **Jobs по умолчанию идут параллельно**; упорядочивайте их через `needs:`
+* 🧱 **Каждый job — свежая VM** — файлы не переходят между jobs, если не использовать `upload-artifact`/`download-artifact`
+* 🧱 **Матрицы** размножают один job по многим параметрам
 
 ```yaml
 jobs:
   test:
     strategy:
-      fail-fast: false             # don't kill 3.12 when 3.13 fails
+      fail-fast: false             # не убивать 3.12, когда 3.13 падает
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     runs-on: ubuntu-24.04
@@ -225,29 +225,29 @@ jobs:
       - run: pytest
 
   docker:
-    needs: test                    # 🔗 only runs if every matrix cell passed
+    needs: test                    # 🔗 запускается, только если прошла каждая ячейка матрицы
     runs-on: ubuntu-24.04
     steps: ...
 ```
 
-> 💡 **Concurrency × matrix:** 3 jobs × N PRs can drain free-tier minutes fast. Always set `cancel-in-progress` (Slide 11).
+> 💡 **Concurrency × матрица:** 3 job × N PR могут быстро сжечь минуты бесплатного тарифа. Всегда задавайте `cancel-in-progress` (слайд 11).
 
 ---
 
-## 📍 Slide 13 – 🎮 Scenario 1: No Tests → pytest in CI
+## 📍 Слайд 13 – 🎮 Сценарий 1: Нет тестов → pytest в CI
 
-**The failure:**
+**Провал:**
 
 ```python
-# app.py from Lab 1
+# app.py из лабораторной 1
 @app.route("/")
 def home():
     return {"message": "Hello", "hostname": os.environ["HOSTNAME"]}
 ```
 
-A typo in `os.environ` raises `KeyError`. It works on the dev's laptop because their `HOSTNAME` is set; it crashes in the container where it isn't.
+Опечатка в `os.environ` вызывает `KeyError`. На ноутбуке разработчика это работает, потому что у него задан `HOSTNAME`; в контейнере, где его нет, всё падает.
 
-**The fix — pytest under CI:**
+**Исправление — pytest под CI:**
 
 ```python
 # tests/test_app.py
@@ -263,24 +263,24 @@ def test_health_endpoint(client):
     assert r.get_json()["status"] == "healthy"
 ```
 
-> 🔗 **Lab 3 Task 1** asks you to write exactly these tests for `/` and `/health` — and to justify pytest vs unittest. Pytest's fixtures + plain `assert` win for most projects.
+> 🔗 **Задача 1 лабораторной 3** просит написать ровно эти тесты для `/` и `/health` — и обосновать выбор pytest против unittest. Fixtures и простой `assert` в pytest выигрывают для большинства проектов.
 
 ---
 
-## 📍 Slide 14 – 🎮 Scenario 2: Manual Docker Builds → build-push-action
+## 📍 Слайд 14 – 🎮 Сценарий 2: Ручные сборки Docker → build-push-action
 
-**The failure (Lab 2's manual flow):**
+**Провал (ручной поток лабораторной 2):**
 
 ```bash
 docker build -t myapp:latest .
 docker tag myapp:latest ghcr.io/me/myapp:v1.2.3
-docker login ghcr.io                       # ← typed by hand
+docker login ghcr.io                       # ← введено вручную
 docker push ghcr.io/me/myapp:v1.2.3
 docker push ghcr.io/me/myapp:latest
-# 😱 forgot to push :v1.2.3 → prod runs yesterday's bug
+# 😱 забыли запушить :v1.2.3 → прод работает со вчерашним багом
 ```
 
-**The fix:**
+**Исправление:**
 
 ```yaml
 docker:
@@ -293,7 +293,7 @@ docker:
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}    # 🔒 ephemeral, no secret to rotate
+        password: ${{ secrets.GITHUB_TOKEN }}    # 🔒 эфемерный, нечего ротировать
     - uses: docker/metadata-action@v5
       id: meta
       with:
@@ -311,35 +311,35 @@ docker:
         cache-to: type=gha,mode=max
 ```
 
-> 🔗 **Lab 3 Task 2** builds this exact job. `GITHUB_TOKEN` is auto-provisioned per run — no Docker Hub credentials to manage.
+> 🔗 **Задача 2 лабораторной 3** собирает именно этот job. `GITHUB_TOKEN` автоматически выдаётся на каждый запуск — никаких учётных данных Docker Hub, которыми нужно управлять.
 
 ---
 
-## 📍 Slide 15 – 🎮 Scenario 3: Vulnerable Dependencies → Trivy + Dependabot
+## 📍 Слайд 15 – 🎮 Сценарий 3: Уязвимые зависимости → Trivy + Dependabot
 
-**The failure:**
+**Провал:**
 
 ```
 # requirements.txt
-flask==2.0.1            # CVE-2023-30861 (high) — session cookie disclosure
-requests==2.25.0        # CVE-2023-32681 (medium) — proxy auth leak
+flask==2.0.1            # CVE-2023-30861 (высокая) — раскрытие cookie сессии
+requests==2.25.0        # CVE-2023-32681 (средняя) — утечка proxy auth
 ```
 
-Lecture 2 introduced `trivy image`. CI runs it on every PR.
+Лекция 2 представила `trivy image`. CI запускает его на каждом PR.
 
 ```yaml
-- uses: aquasecurity/trivy-action@0.35.0   # 📌 v0.35.0+ post-incident-safe (see callout)
+- uses: aquasecurity/trivy-action@0.35.0   # 📌 v0.35.0+ безопасно после инцидента (см. врезку)
   with:
-    scan-type: fs                      # scan requirements.txt + lockfiles
+    scan-type: fs                      # сканировать requirements.txt + lock-файлы
     severity: HIGH,CRITICAL
-    exit-code: "1"                     # 🚫 fail the job
-    ignore-unfixed: true               # skip CVEs with no patch yet
+    exit-code: "1"                     # 🚫 провалить job
+    ignore-unfixed: true               # пропускать CVE без патча
 ```
 
-> ⚠️ **The Trivy supply-chain attack (March 19, 2026 — CVE-2026-33634).** A malicious **Trivy v0.69.4** binary was published to the official GitHub release page after the maintainer's signing keys were compromised. Any CI job that pinned `trivy-action` to floating `master`/`latest`, or that called `curl -sfL .../install.sh | sh` on Mar 19-20, executed attacker code on the runner — with full access to the CI secret store. The fix shipped within 24h (Trivy **v0.69.3** rolled back to the last-known-good build; `trivy-action **v0.35.0+`**, `setup-trivy **v0.2.6+`** are post-incident-safe). **Lesson for this lecture:** the *scanner itself* is in your supply chain. Pin it. Verify its signature. The exact same pattern (compromised maintainer → malicious release) sank tj-actions/changed-files a year earlier — twice in 12 months for two of the most-used security tools in CI/CD.
+> ⚠️ **Атака на цепочку поставок Trivy (19 марта 2026 — CVE-2026-33634).** Вредоносный бинарник **Trivy v0.69.4** был опубликован на официальной странице релизов GitHub после компрометации ключей подписи мейнтейнера. Любой CI job, который закрепил `trivy-action` на плавающем `master`/`latest` или вызывал `curl -sfL .../install.sh | sh` 19–20 марта, исполнял код атакующих на раннере — с полным доступом к хранилищу секретов CI. Исправление выпущено в течение 24 часов (Trivy **v0.69.3** откатили до последней заведомо хорошей сборки; `trivy-action **v0.35.0+`**, `setup-trivy **v0.2.6+`** безопасны после инцидента). **Урок этой лекции:** *сам сканер* — часть вашей цепочки поставок. Закрепляйте его. Проверяйте его подпись. Точно такой же паттерн (скомпрометированный мейнтейнер → вредоносный релиз) потопил tj-actions/changed-files годом ранее — дважды за 12 месяцев для двух самых используемых инструментов безопасности в CI/CD.
 
 
-**Pair with Dependabot** (`.github/dependabot.yml` — native, no token, no third party):
+**В паре с Dependabot** (`.github/dependabot.yml` — нативно, без токена, без третьих сторон):
 
 ```yaml
 version: 2
@@ -347,24 +347,24 @@ updates:
   - package-ecosystem: pip
     directory: /app_python
     schedule: { interval: weekly }
-  - package-ecosystem: github-actions  # 🔒 keep actions/checkout@v4 fresh
+  - package-ecosystem: github-actions  # 🔒 держать actions/checkout@v4 свежим
     directory: /
     schedule: { interval: weekly }
 ```
 
-> 🛡️ **Tool choice:** Trivy (Aqua, Apache-2.0) and Grype (Anchore, Apache-2.0) are first-class FOSS. Snyk is feature-rich but paid past the free tier. Lab 3 accepts any of the three.
+> 🛡️ **Выбор инструмента:** Trivy (Aqua, Apache-2.0) и Grype (Anchore, Apache-2.0) — полноценные FOSS. Snyk богат функциями, но платен сверх бесплатного тарифа. Лабораторная 3 принимает любой из трёх.
 
 ---
 
-## 📍 Slide 16 – 🎮 Scenario 4: Slow CI → Caching
+## 📍 Слайд 16 – 🎮 Сценарий 4: Медленный CI → кэширование
 
 ```
 [Run 1] pip install ........................ 2m 18s
-[Run 2] pip install ........................ 2m 14s     # identical deps
-[Run 3] pip install ........................ 2m 21s     # 😴 still downloading
+[Run 2] pip install ........................ 2m 14s     # те же зависимости
+[Run 3] pip install ........................ 2m 21s     # 😴 всё ещё скачивается
 ```
 
-**The fix — built into `setup-python`:**
+**Исправление — встроено в `setup-python`:**
 
 ```yaml
 - uses: actions/setup-python@v5
@@ -374,16 +374,16 @@ updates:
     cache-dependency-path: app_python/requirements.txt
 ```
 
-The cache key is `runner.os + python-version + hash(requirements.txt)`. Touch `requirements.txt` and the cache invalidates automatically.
+Ключ кэша — `runner.os + python-version + hash(requirements.txt)`. Измените `requirements.txt` — и кэш инвалидируется автоматически.
 
-**Add Docker BuildKit cache** (Slide 14 already shows it):
+**Добавьте кэш Docker BuildKit** (слайд 14 уже показывает это):
 
 ```yaml
 cache-from: type=gha
 cache-to: type=gha,mode=max
 ```
 
-**Path filters skip workflows for unrelated changes:**
+**Фильтры путей пропускают workflow для несвязанных изменений:**
 
 ```yaml
 on:
@@ -391,13 +391,13 @@ on:
     paths: ["app_python/**", ".github/workflows/python-ci.yml"]
 ```
 
-**Measured impact on a typical Lab 3 setup:** 5m 30s → 45s on warm cache. ~7× faster.
+**Измеренный эффект на типичной настройке лабораторной 3:** 5 мин 30 с → 45 с на горячем кэше. ~7× быстрее.
 
-> ⚠️ **Don't cache `~/.cache/pip` manually unless `setup-python` doesn't suit you** — the built-in cache handles invalidation correctly.
+> ⚠️ **Не кэшируйте `~/.cache/pip` вручную, если `setup-python` вам подходит** — встроенный кэш корректно обрабатывает инвалидацию.
 
 ---
 
-## 📍 Slide 17 – 📊 Coverage — Useful, Not Sacred
+## 📍 Слайд 17 – 📊 Покрытие — полезно, но не священно
 
 ```yaml
 - run: pytest --cov=app_python --cov-report=xml --cov-fail-under=70
@@ -405,41 +405,41 @@ on:
   with: { files: ./coverage.xml }
 ```
 
-| Coverage | Reading |
+| Покрытие | Прочтение |
 |---------:|---------|
-| < 50% | Likely no real test culture |
-| 70–85% | Healthy for most application code |
-| 95%+ | Library / safety-critical territory |
-| 100% | Almost always wasteful — diminishing returns |
+| < 50% | Вероятно, нет настоящей культуры тестирования |
+| 70–85% | Здорово для большинства прикладного кода |
+| 95%+ | Территория библиотек / критичных для безопасности систем |
+| 100% | Почти всегда расточительно — убывающая отдача |
 
-> 🔥 **Martin Fowler:** *coverage is a useful tool for finding untested code; it isn't a useful target.* High coverage with weak assertions is theatre.
+> 🔥 **Мартин Фаулер:** *покрытие — полезный инструмент для поиска непротестированного кода; это не полезная цель.* Высокое покрытие со слабыми проверками — театр.
 
 ---
 
-## 📍 Slide 18 – 🔁 Reusable Bits
+## 📍 Слайд 18 – 🔁 Переиспользуемые части
 
-As your CI grows, copy-paste rots. GitHub gives you two reuse primitives:
+По мере роста CI copy-paste гниёт. GitHub даёт два примитива переиспользования:
 
-| Tool | Scope | When |
+| Инструмент | Область | Когда |
 |------|-------|------|
-| 🧩 **Composite action** (`action.yml`) | A bundle of **steps** | "Setup Python + cache + install deps" |
-| 🔁 **Reusable workflow** (`uses: org/repo/.github/workflows/x.yml@v1`) | A whole **job** | "Standard CI for every Python service" |
+| 🧩 **Composite action** (`action.yml`) | Набор **steps** | «Setup Python + кэш + установка зависимостей» |
+| 🔁 **Reusable workflow** (`uses: org/repo/.github/workflows/x.yml@v1`) | Целый **job** | «Стандартный CI для каждого Python-сервиса» |
 
-> 🔗 **Lab 3 doesn't require this** but production monorepos lean on it heavily. We'll revisit in Lecture 13.
+> 🔗 **Лабораторная 3 этого не требует**, но production-монорепозитории активно на это опираются. Вернёмся к теме в лекции 13.
 
 ---
 
-## 📍 Slide 19 – 🏷️ Versioning: SemVer
+## 📍 Слайд 19 – 🏷️ Версионирование: SemVer
 
-`MAJOR.MINOR.PATCH` — Tom Preston-Werner's spec (semver.org, 2013).
+`MAJOR.MINOR.PATCH` — спецификация Тома Престона-Вернера (semver.org, 2013).
 
-| Bump | When | Example |
+| Повышение | Когда | Пример |
 |------|------|---------|
-| **MAJOR** | Breaking API change | `1.4.2 → 2.0.0` |
-| **MINOR** | New backward-compatible feature | `1.4.2 → 1.5.0` |
-| **PATCH** | Bug fix only | `1.4.2 → 1.4.3` |
+| **MAJOR** | Несовместимое изменение API | `1.4.2 → 2.0.0` |
+| **MINOR** | Новая обратно совместимая функция | `1.4.2 → 1.5.0` |
+| **PATCH** | Только исправление бага | `1.4.2 → 1.4.3` |
 
-`docker/metadata-action` can derive SemVer tags from a git tag (`git tag v1.2.3 && git push --tags`):
+`docker/metadata-action` может выводить теги SemVer из git-тега (`git tag v1.2.3 && git push --tags`):
 
 ```yaml
 tags: |
@@ -448,13 +448,13 @@ tags: |
   type=semver,pattern={{major}}    # 1
 ```
 
-**Use SemVer for:** libraries, SDKs, APIs that downstream consumers pin.
+**Используйте SemVer для:** библиотек, SDK, API, которые закрепляют потребители ниже по цепочке.
 
 ---
 
-## 📍 Slide 20 – 📅 Versioning: CalVer
+## 📍 Слайд 20 – 📅 Версионирование: CalVer
 
-`YYYY.MM.DD` or `YYYY.MM.PATCH` — calver.org, popularised by Ubuntu (`24.04`) and pip (`24.3`).
+`YYYY.MM.DD` или `YYYY.MM.PATCH` — calver.org, популяризирован Ubuntu (`24.04`) и pip (`24.3`).
 
 ```yaml
 - id: ver
@@ -466,138 +466,138 @@ tags: |
       ghcr.io/${{ github.repository }}:latest
 ```
 
-**Use CalVer for:** services with continuous deployment where "breaking change" doesn't apply because nobody else pins you (your own service, deployed by your own CI).
+**Используйте CalVer для:** сервисов с непрерывным развёртыванием, где «несовместимое изменение» не применимо, потому что никто, кроме вас, не закрепляет вас (ваш собственный сервис, развёртываемый вашим собственным CI).
 
-> 🚫 **Never deploy `:latest` to production.** It's mutable; tomorrow's image with the same tag is a different artifact. Pin by SemVer or by digest. (Same lesson as Lecture 2.)
+> 🚫 **Никогда не развёртывайте `:latest` в продакшен.** Он изменяем; завтрашний образ с тем же тегом — другой артефакт. Закрепляйте по SemVer или по digest. (Тот же урок, что и в лекции 2.)
 
 ---
 
-## 📍 Slide 21 – 🛡️ Branch Protection: CI is Only Useful if It Blocks
+## 📍 Слайд 21 – 🛡️ Защита веток: CI полезен, только если он блокирует
 
-A green CI badge is decoration. **Required status checks** are the gate.
+Зелёный значок CI — украшение. **Обязательные проверки статуса** — вот ворота.
 
-In `Settings → Branches → Branch protection rules` for `main`:
+В `Settings → Branches → Branch protection rules` для `main`:
 
-* ✅ Require a pull request before merging (≥1 review)
-* ✅ Require status checks to pass before merging — pick `test`, `docker`, `trivy`
-* ✅ Require branches to be up to date before merging
-* ✅ Require linear history (no merge commits) — keeps `git bisect` honest
-* ✅ Do not allow bypassing the above (even admins)
-* ✅ Restrict pushes that create matching branches
+* ✅ Требовать pull request перед слиянием (≥1 ревью)
+* ✅ Требовать прохождения проверок статуса перед слиянием — выберите `test`, `docker`, `trivy`
+* ✅ Требовать актуальности веток перед слиянием
+* ✅ Требовать линейную историю (без merge-коммитов) — держит `git bisect` честным
+* ✅ Не разрешать обход вышеперечисленного (даже админам)
+* ✅ Ограничить пуши, создающие совпадающие ветки
 
 ```mermaid
 flowchart LR
-  PR[📝 Open PR] --> Checks[🤖 CI checks]
-  Checks -->|✅ all green| Review[👀 Review]
-  Review -->|approved| Merge[✅ Merge]
-  Checks -->|❌ any red| Block[🚫 Merge button greyed]
+  PR[📝 Открыть PR] --> Checks[🤖 Проверки CI]
+  Checks -->|✅ всё зелёное| Review[👀 Ревью]
+  Review -->|одобрено| Merge[✅ Слияние]
+  Checks -->|❌ что-то красное| Block[🚫 Кнопка слияния неактивна]
 ```
 
-> 🔗 **Lab 3 Task 3** includes adding this protection to your fork.
+> 🔗 **Задача 3 лабораторной 3** включает добавление этой защиты в ваш форк.
 
 ---
 
-## 📍 Slide 22 – 🚫 CI Anti-Patterns
+## 📍 Слайд 22 – 🚫 Антипаттерны CI
 
-| ❌ Anti-pattern | ✅ Fix |
+| ❌ Антипаттерн | ✅ Исправление |
 |----------------|------|
-| `runs-on: ubuntu-latest` | Pin: `ubuntu-24.04` |
-| `actions/checkout@main` | Pin to a major tag (or SHA for high-risk actions) |
-| Secrets in `env:` at workflow scope | Pass via `secrets:` at job scope, scope minimum permissions |
-| 30-minute CI that everyone skips | Cache + path-filter + matrix-prune; target < 10 min |
-| Tests that depend on prod URLs | Mocks/fixtures; the runner has no creds for a reason |
-| `--ignore-unfixed` left on forever | Track unfixed CVEs in an issue; revisit weekly |
-| Single workflow file, 800 lines | Split by concern; reusable workflows for shared jobs |
-| Skipping CI with `[skip ci]` | Don't. The next person merges the regression. |
+| `runs-on: ubuntu-latest` | Закрепите: `ubuntu-24.04` |
+| `actions/checkout@main` | Закрепите на мажорном теге (или SHA для рискованных actions) |
+| Секреты в `env:` на уровне workflow | Передавайте через `secrets:` на уровне job, ограничивайте разрешения по минимуму |
+| 30-минутный CI, который все пропускают | Кэш + фильтр путей + сокращение матрицы; цель < 10 мин |
+| Тесты, зависящие от прод-URL | Моки/fixtures; у раннера нет учётных данных не просто так |
+| `--ignore-unfixed` включён навсегда | Отслеживайте неисправленные CVE в issue; пересматривайте еженедельно |
+| Один файл workflow на 800 строк | Разделяйте по назначению; reusable workflows для общих jobs |
+| Пропуск CI через `[skip ci]` | Не делайте так. Следующий человек сольёт регрессию. |
 
 ---
 
-## 📍 Slide 23 – 📈 CI Metrics That Matter
+## 📍 Слайд 23 – 📈 Метрики CI, которые важны
 
-Track these alongside your DORA metrics (Lec 1, Slide 23):
+Отслеживайте их вместе с метриками DORA (лекция 1, слайд 23):
 
-| Metric | Healthy target | Why |
+| Метрика | Здоровая цель | Почему |
 |--------|---------------:|-----|
-| ⏱️ **Pipeline duration (p50)** | < 10 min | Feedback latency — Forsgren's *Accelerate* correlates with deploy frequency |
-| ✅ **Main-branch CI pass rate** | > 95% | Below that, flakes erode trust; people start ignoring red |
-| 🔄 **Mean time to green** after red | < 1 hour | How fast you fix `main` |
-| 🛡️ **CVEs caught in CI vs prod** | Mostly CI | Inverse of "leaked vulnerability lifetime" |
-| 📦 **Cache hit rate** | > 80% | Direct cost driver on hosted runners |
+| ⏱️ **Длительность конвейера (p50)** | < 10 мин | Задержка обратной связи — в *Accelerate* Форсгрен коррелирует с частотой развёртываний |
+| ✅ **Доля успешных CI в `main`** | > 95% | Ниже — нестабильность подрывает доверие; люди начинают игнорировать красное |
+| 🔄 **Среднее время до зелёного** после красного | < 1 часа | Как быстро вы чините `main` |
+| 🛡️ **CVE, пойманные в CI vs в проде** | В основном в CI | Обратная величина «времени жизни утёкшей уязвимости» |
+| 📦 **Доля попаданий в кэш** | > 80% | Прямой драйвер затрат на хостинговых раннерах |
 
-> 📊 **Sources:** Forsgren et al., *Accelerate* (2018); CircleCI *State of Software Delivery 2024*.
-
----
-
-## 📍 Slide 24 – 🏢 CI at Scale — Real Numbers
-
-* 🐙 **GitHub itself** — ~100M Actions runs/month across public repos; every PR to `github/github` runs ~30k tests
-* 🛒 **Shopify** — production deploys dozens of times per day; CI feedback under 5 minutes on the main monolith (Shopify Engineering, 2024)
-* 🎬 **Netflix** — every microservice built and tested per commit; ~3000+ builds/day
-* 🔍 **Google** — single trunk, **two billion** LOC, ~100M tests/day on Bazel (Winters et al., *Software Engineering at Google*, 2020)
-* 🏦 **Capital One** — 50+ teams on shared reusable workflows; a platform team owns the pipeline so product teams don't reinvent it
-
-> 🔥 **Common thread:** slow CI taxes every engineer, every day. A minute saved per run pays back across the org.
+> 📊 **Источники:** Forsgren и др., *Accelerate* (2018); CircleCI *State of Software Delivery 2024*.
 
 ---
 
-## 📍 Slide 25 – 🎯 Key Takeaways
+## 📍 Слайд 24 – 🏢 CI в масштабе — реальные цифры
 
-1. 🤖 **CI integrates frequently** — every push, on a clean runner, on the same workflow
-2. 🔺 **Pyramid: unit-heavy, integration-thin, E2E-rare** — the inverse is flaky and slow
-3. 📌 **Pin everything** — runner OS, action major versions, base images by digest in prod
-4. 🛡️ **Scan in CI, fix in PR** — Trivy or Grype on filesystem + image; Dependabot keeps deps fresh
-5. ⚡ **Cache the right things** — `setup-python` for pip, BuildKit GHA cache for layers, path filters for irrelevant pushes
-6. 🏷️ **SemVer for libraries, CalVer for services; never deploy `:latest`**
-7. 🚦 **Required checks > badges** — branch protection is the part that matters
-8. 📊 **Measure pipeline duration + pass rate** — slow, flaky CI gets ignored
+* 🐙 **Сам GitHub** — ~100 млн запусков Actions в месяц по публичным репозиториям; каждый PR в `github/github` прогоняет ~30 тыс. тестов
+* 🛒 **Shopify** — продакшен-развёртывания десятки раз в день; обратная связь CI меньше 5 минут на основном монолите (Shopify Engineering, 2024)
+* 🎬 **Netflix** — каждый микросервис собирается и тестируется на каждый коммит; ~3000+ сборок в день
+* 🔍 **Google** — единый ствол, **два миллиарда** строк кода, ~100 млн тестов в день на Bazel (Winters и др., *Software Engineering at Google*, 2020)
+* 🏦 **Capital One** — 50+ команд на общих reusable workflows; команда платформы владеет конвейером, чтобы продуктовые команды не изобретали его заново
 
-> 💡 **A good pipeline is fast, deterministic, and boring. Excitement in CI is a smell.**
+> 🔥 **Общая нить:** медленный CI облагает налогом каждого инженера каждый день. Одна сэкономленная минута на запуск окупается по всей организации.
 
 ---
 
-## 📍 Slide 26 – 🚀 What Comes Next
+## 📍 Слайд 25 – 🎯 Ключевые выводы
 
-**📚 Next lecture: *Infrastructure as Code — Terraform & Pulumi*.** Your CI builds an image; Lecture 4 covers how the cloud resources that *run* the image get created reproducibly, in code, reviewed and applied through the same kind of pipeline you built today.
+1. 🤖 **CI интегрирует часто** — каждый пуш, на чистом раннере, на одном и том же workflow
+2. 🔺 **Пирамида: много unit, мало интеграционных, редкие E2E** — обратное — это нестабильность и медлительность
+3. 📌 **Закрепляйте всё** — ОС раннера, мажорные версии actions, базовые образы по digest в проде
+4. 🛡️ **Сканируйте в CI, чините в PR** — Trivy или Grype по файловой системе + образу; Dependabot держит зависимости свежими
+5. ⚡ **Кэшируйте правильные вещи** — `setup-python` для pip, кэш BuildKit GHA для слоёв, фильтры путей для несвязанных пушей
+6. 🏷️ **SemVer для библиотек, CalVer для сервисов; никогда не развёртывайте `:latest`**
+7. 🚦 **Обязательные проверки > значки** — защита веток — это то, что имеет значение
+8. 📊 **Измеряйте длительность конвейера + долю успеха** — медленный, нестабильный CI игнорируют
 
-* 🌍 Declarative vs imperative provisioning
-* 🏗️ Terraform 1.15 modules; Pulumi 3.x for code-native infra
-* 🔐 Backend state, locking, drift detection
-* 🧪 `terraform plan` as a CI gate — the same idea you applied to tests
+> 💡 **Хороший конвейер быстрый, детерминированный и скучный. Азарт в CI — это запашок.**
 
-**🔬 Lab 3 deliverable:**
+---
 
-* `app_python/tests/` with pytest covering `/` and `/health`
-* `.github/workflows/python-ci.yml` — lint → test → Trivy → build → push to GHCR
-* Branch protection on `main` requiring those checks
-* Status + coverage badges in the README
-* Bonus: a second workflow for your compiled-language app behind a `paths:` filter
+## 📍 Слайд 26 – 🚀 Что дальше
+
+**📚 Следующая лекция: *Infrastructure as Code — Terraform & Pulumi*.** Ваш CI собирает образ; лекция 4 рассказывает, как облачные ресурсы, которые *запускают* образ, создаются воспроизводимо, в коде, проверяются и применяются через такой же конвейер, какой вы построили сегодня.
+
+* 🌍 Декларативный и императивный провижининг
+* 🏗️ Модули Terraform 1.15; Pulumi 3.x для code-native инфраструктуры
+* 🔐 Backend state, блокировки, обнаружение дрейфа
+* 🧪 `terraform plan` как ворота CI — та же идея, что вы применили к тестам
+
+**🔬 Результат лабораторной 3:**
+
+* `app_python/tests/` с pytest, покрывающими `/` и `/health`
+* `.github/workflows/python-ci.yml` — линтинг → тестирование → Trivy → сборка → пуш в GHCR
+* Защита ветки `main`, требующая этих проверок
+* Значки статуса + покрытия в README
+* Бонус: второй workflow для приложения на компилируемом языке за фильтром `paths:`
 
 ```mermaid
 flowchart LR
-  Lab1[🐍 Lab 1 app] --> Lab2[🐳 Lab 2 image]
-  Lab2 --> Lab3[🤖 Lab 3 CI]
-  Lab3 --> Lab4[🌍 Lab 4 IaC]
-  Lab4 --> Future[🚀 Labs 5+]
+  Lab1[🐍 Приложение лабораторной 1] --> Lab2[🐳 Образ лабораторной 2]
+  Lab2 --> Lab3[🤖 CI лабораторной 3]
+  Lab3 --> Lab4[🌍 IaC лабораторной 4]
+  Lab4 --> Future[🚀 Лабораторные 5+]
 ```
 
-**👋 See you in Lecture 4.**
+**👋 До встречи на лекции 4.**
 
 ---
 
-## 📚 Resources
+## 📚 Ресурсы
 
-**📕 Books:**
-* *Continuous Delivery* — Jez Humble & David Farley (Addison-Wesley, 2010). The canonical text.
-* *Continuous Integration* — Duvall, Matyas, Glover (2007). Pre-cloud, principles unchanged.
-* *Accelerate* — Forsgren, Humble, Kim (2018). The DORA science.
-* *Software Engineering at Google* — Winters, Manshreck, Wright (2020). CI at trunk scale.
+**📕 Книги:**
+* *Continuous Delivery* — Джез Хамбл и Дэвид Фарли (Addison-Wesley, 2010). Канонический текст.
+* *Continuous Integration* — Duvall, Matyas, Glover (2007). До-облачная эпоха, принципы неизменны.
+* *Accelerate* — Форсгрен, Хамбл, Ким (2018). Наука DORA.
+* *Software Engineering at Google* — Winters, Manshreck, Wright (2020). CI в масштабе ствола.
 
-**🔗 Links:**
-* 🌐 [docs.github.com/actions](https://docs.github.com/actions) — official reference
+**🔗 Ссылки:**
+* 🌐 [docs.github.com/actions](https://docs.github.com/actions) — официальная справка
 * 🌐 [github.com/aquasecurity/trivy](https://github.com/aquasecurity/trivy) / [anchore/grype](https://github.com/anchore/grype)
 * 🌐 [semver.org](https://semver.org) / [calver.org](https://calver.org)
-* 🌐 [martinfowler.com/articles/continuousIntegration.html](https://martinfowler.com/articles/continuousIntegration.html) — Fowler, 2006
+* 🌐 [martinfowler.com/articles/continuousIntegration.html](https://martinfowler.com/articles/continuousIntegration.html) — Фаулер, 2006
 
-**🛠️ Local tooling:** [`act`](https://github.com/nektos/act) (run Actions locally), [`actionlint`](https://github.com/rhysd/actionlint) (lint workflows), [`gh`](https://cli.github.com/) (`gh run watch`).
+**🛠️ Локальные инструменты:** [`act`](https://github.com/nektos/act) (запуск Actions локально), [`actionlint`](https://github.com/rhysd/actionlint) (линтинг workflow), [`gh`](https://cli.github.com/) (`gh run watch`).
 
-**🎓 Quiz:** post-lecture quiz feeds the weeks 1–3 leaderboard window (see `README.md` → Grading).
+**🎓 Квиз:** квиз после лекции идёт в зачёт таблицы лидеров недель 1–3 (см. `README.md` → Grading).

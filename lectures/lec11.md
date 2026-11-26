@@ -1,11 +1,11 @@
-# 📌 Lecture 11 — Secrets & OpenBao: Stop Putting Passwords in Git
+# 📌 Лекция 11 — Секреты и OpenBao: перестаньте класть пароли в Git
 
-## 📍 Slide 1 – 🔐 Welcome to Secret Management
+## 📍 Слайд 1 – 🔐 Добро пожаловать в управление секретами
 
-* 🌍 **Lab 10 left you with a clean Helm chart** — Deployment, Service, Ingress, values per environment. One problem: a real app needs a DB password, an API key, a TLS cert. You can't put those in `values.yaml` and push to GitHub.
-* 😱 **Secrets in code is the #1 cause of cloud breaches** — and the cheapest to prevent.
-* 🎯 This lecture: K8s `Secret` (what it actually is), encryption-at-rest, the **OpenBao** project (Vault's open-source successor), and the two patterns to inject secrets into pods — **Vault Agent Injector** and **External Secrets Operator**.
-* 🔗 **Tie-in to Lab 11:** add a `templates/secrets.yaml` to your Lab 10 chart, install **OpenBao** via Helm, configure Kubernetes auth, and inject a secret via Vault Agent annotations.
+* 🌍 **Лабораторная 10 оставила вас с чистым Helm chart'ом** — Deployment, Service, Ingress, values на каждую среду. Одна проблема: реальному приложению нужен пароль к БД, API-ключ, TLS-сертификат. Вы не можете положить их в `values.yaml` и запушить в GitHub.
+* 😱 **Секреты в коде — причина облачных утечек №1** — и самая дешёвая для предотвращения.
+* 🎯 Эта лекция: K8s `Secret` (что это на самом деле), шифрование в состоянии покоя, проект **OpenBao** (open-source преемник Vault) и два паттерна внедрения секретов в pod'ы — **Vault Agent Injector** и **External Secrets Operator**.
+* 🔗 **Связь с лабораторной 11:** добавьте `templates/secrets.yaml` в ваш chart из лабораторной 10, установите **OpenBao** через Helm, настройте Kubernetes auth и внедрите секрет через аннотации Vault Agent.
 
 ```mermaid
 flowchart LR
@@ -18,51 +18,51 @@ flowchart LR
 
 ---
 
-## 📍 Slide 2 – 🎯 Learning Outcomes
+## 📍 Слайд 2 – 🎯 Результаты обучения
 
-| # | Outcome |
+| # | Результат |
 |---|---------|
-| 1 | 🧠 Explain why a K8s `Secret` is **not encrypted** by default (it's base64) |
-| 2 | 🔐 Enable **encryption-at-rest** in etcd using an `EncryptionConfiguration` + KMS provider |
-| 3 | 🏰 Run **OpenBao 2.5.0** in Kubernetes; configure KV-v2 + Kubernetes auth + a read policy |
-| 4 | 💉 Use the **Vault Agent Injector** sidecar pattern to render secrets to a file in the pod |
-| 5 | 🤖 Use the **External Secrets Operator** (ESO) to sync from OpenBao → native K8s `Secret` |
-| 6 | 🗺️ Choose the right pattern (Agent Injector vs ESO vs CSI vs Sealed Secrets vs SOPS) |
+| 1 | 🧠 Объяснить, почему K8s `Secret` **не зашифрован** по умолчанию (это base64) |
+| 2 | 🔐 Включить **шифрование в состоянии покоя** в etcd с помощью `EncryptionConfiguration` + провайдера KMS |
+| 3 | 🏰 Запустить **OpenBao 2.5.0** в Kubernetes; настроить KV-v2 + Kubernetes auth + политику чтения |
+| 4 | 💉 Использовать паттерн sidecar **Vault Agent Injector** для рендеринга секретов в файл внутри pod'а |
+| 5 | 🤖 Использовать **External Secrets Operator** (ESO) для синхронизации из OpenBao → нативный K8s `Secret` |
+| 6 | 🗺️ Выбрать правильный паттерн (Agent Injector vs ESO vs CSI vs Sealed Secrets vs SOPS) |
 
-**Tech stack pinned for May 2026:** Kubernetes **1.36**, **OpenBao 2.5.0** (Linux Foundation, MPL-2.0), External Secrets Operator **v2.5.0**, `vault` CLI (still works against OpenBao — wire-compatible).
-
----
-
-## 📍 Slide 3 – 💀 The Cost of Getting It Wrong
-
-> 💬 *"The only truly secure system is one that is powered off, cast in a block of concrete and sealed in a lead-lined room with armed guards."* — Gene Spafford
-
-* 💸 **IBM Cost of a Data Breach 2025:** global average **$4.44M** per breach; US record **$10.22M**
-* 🔍 **Credential abuse** is the #1 initial-access vector in the Verizon DBIR every year since 2019
-* ⏱️ **Mean time to detect** a credential breach: ~204 days (IBM 2025)
-* 🤖 **GitGuardian 2024:** ~12.8M new secrets leaked to public GitHub in a single year — most never rotated
-
-> 🤔 **Think:** how many `.env` files do you have on your laptop right now that contain a real production password?
+**Технологический стек, зафиксированный на май 2026:** Kubernetes **1.36**, **OpenBao 2.5.0** (Linux Foundation, MPL-2.0), External Secrets Operator **v2.5.0**, CLI `vault` (по-прежнему работает с OpenBao — совместим по протоколу).
 
 ---
 
-## 📍 Slide 4 – 📜 Real Incidents — Learn From Their Pain
+## 📍 Слайд 3 – 💀 Цена ошибки
 
-| Year | Who | What |
+> 💬 *"Единственная по-настоящему безопасная система — это та, которая выключена, залита бетоном и запечатана в комнате со свинцовой обшивкой и вооружённой охраной."* — Gene Spafford
+
+* 💸 **IBM Cost of a Data Breach 2025:** среднемировой ущерб **$4.44M** за утечку; рекорд США — **$10.22M**
+* 🔍 **Злоупотребление учётными данными** — вектор первоначального доступа №1 в Verizon DBIR каждый год с 2019
+* ⏱️ **Среднее время обнаружения** утечки учётных данных: ~204 дня (IBM 2025)
+* 🤖 **GitGuardian 2024:** ~12.8M новых секретов утекло в публичный GitHub за один год — большинство так и не ротировано
+
+> 🤔 **Подумайте:** сколько файлов `.env` на вашем ноутбуке прямо сейчас содержат настоящий продакшн-пароль?
+
+---
+
+## 📍 Слайд 4 – 📜 Реальные инциденты — учитесь на их боли
+
+| Год | Кто | Что |
 |------|-----|------|
-| 2014 | **Code Spaces** | AWS root keys in code → attacker wiped all backups + all customer data → **company shut down within 12 hours** |
-| 2016 | **Uber** | AWS creds hardcoded in a private GitHub repo (compromised dev account) → S3 dump of **57M users** → **$148M settlement** |
-| 2022 | **Dropbox** | 130 private GH repos stolen via phishing — leaked internal API keys + 3rd-party creds |
-| 2022 | **Toyota** | `.git` directory served from a public asset → customer-data DB credentials leaked **for 10 years** |
-| 2025 | **tj-actions/changed-files** | CVE-2025-30066, compromised popular GitHub Action **dumped every secret** in CI logs of 23,000+ repos |
+| 2014 | **Code Spaces** | AWS root-ключи в коде → атакующий уничтожил все резервные копии + все данные клиентов → **компания закрылась в течение 12 часов** |
+| 2016 | **Uber** | AWS-креды захардкожены в приватном репозитории GitHub (взломан аккаунт разработчика) → дамп S3 на **57M пользователей** → **мировое соглашение на $148M** |
+| 2022 | **Dropbox** | 130 приватных GH-репозиториев украдено через фишинг — утекли внутренние API-ключи + сторонние креды |
+| 2022 | **Toyota** | каталог `.git` раздавался из публичного ресурса → учётные данные БД клиентских данных утекли **на 10 лет** |
+| 2025 | **tj-actions/changed-files** | CVE-2025-30066, скомпрометирован популярный GitHub Action **слил каждый секрет** в логи CI 23 000+ репозиториев |
 
-> 🔥 **Pattern:** every single one of these was a **secret stored in the wrong place** (code, git, CI logs, public asset). Not zero-days. Not 0-click. Just a credential in the wrong file.
+> 🔥 **Паттерн:** каждый из них — это **секрет, хранящийся не в том месте** (код, git, логи CI, публичный ресурс). Не zero-day. Не 0-click. Просто учётные данные не в том файле.
 
 ---
 
-## 📍 Slide 5 – ☸️ The Kubernetes `Secret` Object
+## 📍 Слайд 5 – ☸️ Объект `Secret` в Kubernetes
 
-A `Secret` is a first-class K8s API object, separate from `ConfigMap` because it's *intended* for sensitive data.
+`Secret` — это первоклассный объект API K8s, отдельный от `ConfigMap`, потому что он *предназначен* для чувствительных данных.
 
 ```yaml
 apiVersion: v1
@@ -79,15 +79,15 @@ data:                                  # ⚠️ values must be base64-encoded
 #   password: SuperSecret123
 ```
 
-* 📦 Three creation patterns: `kubectl create secret` (imperative), YAML `kind: Secret` (declarative), Helm `templates/secrets.yaml`
-* 🔑 **Built-in types:** `Opaque` (generic), `kubernetes.io/dockerconfigjson` (image pulls), `kubernetes.io/tls` (cert + key), `kubernetes.io/service-account-token`
-* 🚦 Consumed by pods as **env vars** (`envFrom`/`secretKeyRef`) or as a **file mount** (`projected` / `secret` volume)
+* 📦 Три паттерна создания: `kubectl create secret` (императивный), YAML `kind: Secret` (декларативный), Helm `templates/secrets.yaml`
+* 🔑 **Встроенные типы:** `Opaque` (общий), `kubernetes.io/dockerconfigjson` (pull образов), `kubernetes.io/tls` (сертификат + ключ), `kubernetes.io/service-account-token`
+* 🚦 Потребляется pod'ами как **переменные окружения** (`envFrom`/`secretKeyRef`) или как **монтирование файла** (`projected` / `secret` volume)
 
 ---
 
-## 📍 Slide 6 – ⚠️ Base64 Is Not Encryption
+## 📍 Слайд 6 – ⚠️ Base64 — это не шифрование
 
-> ⚠️ **The single most-tested fact in K8s exams** — and the misunderstanding behind every junior breach.
+> ⚠️ **Самый проверяемый на экзаменах K8s факт** — и непонимание, стоящее за каждой утечкой у джунов.
 
 ```bash
 $ echo "SuperSecret123" | base64
@@ -96,17 +96,17 @@ $ echo "U3VwZXJTZWNyZXQxMjMK" | base64 -d
 SuperSecret123                         # 🔓 No key. No password. Just decode.
 ```
 
-| 🔄 Encoding (base64) | 🔐 Encryption (AES-GCM, KMS, …) |
+| 🔄 Кодирование (base64) | 🔐 Шифрование (AES-GCM, KMS, …) |
 |----------------------|----------------------------------|
-| ✅ Reversible by anyone with the string | 🔑 Requires a key to decrypt |
-| 🎯 Designed for binary-safe text transport | 🛡️ Designed for confidentiality |
-| 📦 Same data, different format | 🔒 Different data, mathematically secure |
+| ✅ Обратимо любым, у кого есть строка | 🔑 Требует ключ для расшифровки |
+| 🎯 Создано для бинарно-безопасной транспортировки текста | 🛡️ Создано для конфиденциальности |
+| 📦 Те же данные, другой формат | 🔒 Другие данные, математически защищённые |
 
-> 🔥 **Why base64 then?** Because `Secret.data` values must be valid JSON/YAML strings — binary like a TLS key wouldn't fit otherwise. Confidentiality is the API server's + etcd's job, not base64's.
+> 🔥 **Почему тогда base64?** Потому что значения `Secret.data` должны быть валидными строками JSON/YAML — иначе бинарные данные, такие как TLS-ключ, не поместились бы. Конфиденциальность — задача API-сервера + etcd, а не base64.
 
 ---
 
-## 📍 Slide 7 – 🗄️ Where Secrets Actually Live: etcd
+## 📍 Слайд 7 – 🗄️ Где на самом деле живут секреты: etcd
 
 ```mermaid
 flowchart LR
@@ -117,18 +117,18 @@ flowchart LR
   API -->|inject env/file| Pod
 ```
 
-Two hard truths about etcd:
+Две жёсткие истины об etcd:
 
-* 🔓 **By default, etcd stores Secrets as base64 (plaintext-equivalent).** Anyone with disk access to an etcd member, an etcd backup, or a snapshot can dump all your secrets.
-* 🛡️ **RBAC protects the API path, not the data at rest.** A node with `etcdctl get /registry/secrets/...` skips the API server entirely.
+* 🔓 **По умолчанию etcd хранит Secret'ы как base64 (эквивалент открытого текста).** Любой с доступом к диску члена etcd, резервной копии etcd или снапшоту может сдампить все ваши секреты.
+* 🛡️ **RBAC защищает путь через API, а не данные в состоянии покоя.** Узел с `etcdctl get /registry/secrets/...` полностью обходит API-сервер.
 
-> 🤔 **Question:** does your managed control plane (EKS, GKE, AKS) encrypt etcd? **Often yes** — but at the *disk* level (cloud-provider encryption), not the K8s `EncryptionConfiguration` level. They're different threat models.
+> 🤔 **Вопрос:** шифрует ли etcd ваш управляемый control plane (EKS, GKE, AKS)? **Часто да** — но на *дисковом* уровне (шифрование облачного провайдера), а не на уровне K8s `EncryptionConfiguration`. Это разные модели угроз.
 
 ---
 
-## 📍 Slide 8 – 🔐 Encryption-at-Rest in etcd
+## 📍 Слайд 8 – 🔐 Шифрование в состоянии покоя в etcd
 
-K8s ships an `EncryptionConfiguration` API: the kube-apiserver encrypts Secret payloads **before** writing to etcd.
+K8s поставляет API `EncryptionConfiguration`: kube-apiserver шифрует полезную нагрузку Secret **до** записи в etcd.
 
 ```yaml
 # /etc/kubernetes/enc/enc-config.yaml
@@ -148,16 +148,16 @@ resources:
       - identity: {}                   # ⚠️ identity = no encryption; must be LAST
 ```
 
-Activation:
-* 🛠️ kube-apiserver flag: `--encryption-provider-config=/etc/kubernetes/enc/enc-config.yaml`
-* 🔄 **Re-encrypt existing secrets** after enabling: `kubectl get secrets -A -o json | kubectl replace -f -`
-* 🔑 **Rotation** = add a new key at top of the list, replace all secrets, then move the old key down or remove it
+Активация:
+* 🛠️ Флаг kube-apiserver: `--encryption-provider-config=/etc/kubernetes/enc/enc-config.yaml`
+* 🔄 **Перешифруйте существующие секреты** после включения: `kubectl get secrets -A -o json | kubectl replace -f -`
+* 🔑 **Ротация** = добавить новый ключ в начало списка, заменить все секреты, затем переместить старый ключ вниз или удалить
 
-> ⚠️ **Gotcha:** if `identity` isn't last, secrets stay unencrypted. Order matters.
+> ⚠️ **Ловушка:** если `identity` не последний, секреты остаются незашифрованными. Порядок важен.
 
 ---
 
-## 📍 Slide 9 – 🪦 The Vault → OpenBao Story
+## 📍 Слайд 9 – 🪦 История Vault → OpenBao
 
 ```mermaid
 timeline
@@ -170,15 +170,15 @@ timeline
   2026-Feb-04 : OpenBao 2.5.0 — Namespaces (free), horizontal read scalability
 ```
 
-* ⚖️ **BSL 1.1** = source-available but you may not offer Vault as a commercial managed service competing with HashiCorp.
-* 🍴 The OpenBao fork is governed by the **Linux Foundation**, MPL-2.0 (true open source), wire-compatible with the `vault` CLI.
-* 💡 The **paid HashiCorp features** (Namespaces, horizontal read scaling, MFA) are **free in OpenBao 2.5.0**.
+* ⚖️ **BSL 1.1** = исходный код доступен, но вы не можете предлагать Vault как коммерческий управляемый сервис, конкурирующий с HashiCorp.
+* 🍴 Форк OpenBao управляется **Linux Foundation**, MPL-2.0 (настоящий open source), совместим по протоколу с CLI `vault`.
+* 💡 **Платные функции HashiCorp** (Namespaces, горизонтальное масштабирование чтения, MFA) **бесплатны в OpenBao 2.5.0**.
 
-> 🔥 **Why we teach OpenBao, not Vault:** the lab will run on student laptops. BSL says you can do that. But every reusable manifest you build today is going to a production cluster tomorrow — start with the license that doesn't get re-litigated.
+> 🔥 **Почему мы учим OpenBao, а не Vault:** лабораторная будет работать на ноутбуках студентов. BSL говорит, что так можно. Но каждый переиспользуемый манифест, который вы создаёте сегодня, завтра отправится в продакшн-кластер — начинайте с лицензии, которую не придётся оспаривать заново.
 
 ---
 
-## 📍 Slide 10 – 🏰 OpenBao Architecture
+## 📍 Слайд 10 – 🏰 Архитектура OpenBao
 
 ```mermaid
 flowchart TD
@@ -203,14 +203,14 @@ flowchart TD
   Auth --> Aud
 ```
 
-**Three concepts you must know:**
-* 🔐 **Secret Engines** = where secrets live or are generated. `kv-v2` (versioned static), `database` (dynamic creds), `pki` (cert issuance), `transit` (encryption-as-a-service).
-* 🔑 **Auth Methods** = how clients prove who they are. For K8s pods: `kubernetes` (validates the pod's ServiceAccount JWT against the K8s TokenReview API).
-* 📋 **Policies** = HCL files describing path-level capabilities (`read`, `list`, `create`, `update`, `delete`, `sudo`, `deny`).
+**Три концепции, которые вы обязаны знать:**
+* 🔐 **Secret Engines** = где живут или генерируются секреты. `kv-v2` (версионированные статические), `database` (динамические креды), `pki` (выдача сертификатов), `transit` (шифрование-как-сервис).
+* 🔑 **Auth Methods** = как клиенты доказывают, кто они. Для pod'ов K8s: `kubernetes` (проверяет JWT ServiceAccount pod'а через API TokenReview K8s).
+* 📋 **Policies** = HCL-файлы, описывающие возможности на уровне путей (`read`, `list`, `create`, `update`, `delete`, `sudo`, `deny`).
 
 ---
 
-## 📍 Slide 11 – 🛠️ Install OpenBao via Helm
+## 📍 Слайд 11 – 🛠️ Установка OpenBao через Helm
 
 ```bash
 helm repo add openbao https://openbao.github.io/openbao-helm
@@ -228,14 +228,14 @@ kubectl get pods -n openbao
 # openbao-agent-injector-7f...            1/1     Running
 ```
 
-* 🚨 **Dev mode** auto-initializes, auto-unseals, stores in RAM. Restart = secret loss. **Lab only.**
-* 🏢 **Prod:** integrated storage (Raft) on 3-5 nodes, auto-unseal via KMS, audit device → log aggregator, TLS everywhere.
+* 🚨 **Dev-режим** автоматически инициализируется, автоматически распечатывается (unseal), хранит в RAM. Перезапуск = потеря секретов. **Только для лабораторной.**
+* 🏢 **Продакшн:** интегрированное хранилище (Raft) на 3-5 узлах, авто-unseal через KMS, устройство аудита → агрегатор логов, TLS везде.
 
-> 🔥 **The `vault` CLI works.** OpenBao kept the API + CLI compatible. `vault status`, `vault kv put`, `vault login` — same commands.
+> 🔥 **CLI `vault` работает.** OpenBao сохранил совместимость API + CLI. `vault status`, `vault kv put`, `vault login` — те же команды.
 
 ---
 
-## 📍 Slide 12 – 🔑 Configure: KV-v2 + Kubernetes Auth + Policy
+## 📍 Слайд 12 – 🔑 Настройка: KV-v2 + Kubernetes Auth + Policy
 
 ```bash
 kubectl exec -n openbao -it openbao-0 -- /bin/sh
@@ -267,11 +267,11 @@ vault write auth/kubernetes/role/lab11 \
   ttl=1h
 ```
 
-* 🎯 The **role** ties three things together: which SA can authenticate, which policy gets attached, and how long the resulting token lasts.
+* 🎯 **Role** связывает три вещи: какой SA может аутентифицироваться, какая политика прикрепляется и как долго живёт полученный токен.
 
 ---
 
-## 📍 Slide 13 – 💉 Vault Agent Injector: The Sidecar Pattern
+## 📍 Слайд 13 – 💉 Vault Agent Injector: паттерн sidecar
 
 ```mermaid
 sequenceDiagram
@@ -291,13 +291,13 @@ sequenceDiagram
   Note over Pod: app container reads file
 ```
 
-* 🪝 The injector is a **MutatingAdmissionWebhook** — it edits the podspec at admission time, transparent to the chart author beyond annotations.
-* 🔄 An **init container** fetches the secret before the app starts (so the file exists at app boot). A **sidecar** keeps renewing the token + refreshing the file.
-* 📁 Secrets land in `/vault/secrets/<name>` on a shared `emptyDir` volume.
+* 🪝 Инжектор — это **MutatingAdmissionWebhook** — он редактирует podspec во время admission, прозрачно для автора chart'а за пределами аннотаций.
+* 🔄 **Init-контейнер** забирает секрет до запуска приложения (так что файл существует при старте приложения). **Sidecar** продлевает токен + обновляет файл.
+* 📁 Секреты попадают в `/vault/secrets/<name>` на общем томе `emptyDir`.
 
 ---
 
-## 📍 Slide 14 – 🏷️ Vault Agent Annotations
+## 📍 Слайд 14 – 🏷️ Аннотации Vault Agent
 
 ```yaml
 spec:
@@ -322,14 +322,14 @@ spec:
       containers: [...]
 ```
 
-* 🎨 `agent-inject-template-*` lets you render the secret in **any format** — `.env`, JSON, YAML, HCL, a full app config file.
-* 🔁 `agent-inject-command-*` runs an in-pod command after re-rendering (signal the app to reload config).
+* 🎨 `agent-inject-template-*` позволяет рендерить секрет в **любом формате** — `.env`, JSON, YAML, HCL, полный конфигурационный файл приложения.
+* 🔁 `agent-inject-command-*` выполняет команду внутри pod'а после повторного рендеринга (сигнал приложению перезагрузить конфиг).
 
 ---
 
-## 📍 Slide 15 – 🤖 External Secrets Operator (ESO): The Other Pattern
+## 📍 Слайд 15 – 🤖 External Secrets Operator (ESO): другой паттерн
 
-ESO **syncs** secrets from an external store → a native K8s `Secret`. No sidecar. Apps read a normal `Secret` and don't know ESO exists.
+ESO **синхронизирует** секреты из внешнего хранилища → в нативный K8s `Secret`. Без sidecar. Приложения читают обычный `Secret` и не знают, что ESO существует.
 
 ```mermaid
 flowchart LR
@@ -368,76 +368,76 @@ spec:
 
 ---
 
-## 📍 Slide 16 – 💉 Agent Injector vs ESO vs CSI: Pick One
+## 📍 Слайд 16 – 💉 Agent Injector vs ESO vs CSI: выберите одно
 
-| Concern | Agent Injector | ESO | Secrets Store CSI |
+| Аспект | Agent Injector | ESO | Secrets Store CSI |
 |---------|----------------|-----|-------------------|
-| 📦 Secret lives in K8s `Secret`? | ❌ file only | ✅ yes | ⚠️ optional sync |
-| 🔁 Auto-refresh on rotation | ✅ live (template + signal) | ⚠️ poll interval | ⚠️ on pod restart |
-| 🧊 Pod resource cost | ❌ sidecar per pod | ✅ one controller | ✅ daemonset per node |
-| 🔑 Supported auth methods | ✅ all Vault methods | ✅ all | ⚠️ k8s only |
-| 🎯 Best when | dynamic creds, short TTL, signal-driven reloads | most pods want `envFrom`, polling is fine | strict no-K8s-Secret rules, file mounts |
-| 🚦 Complexity | 🟡 medium | 🟢 low | 🟡 medium |
+| 📦 Секрет живёт в K8s `Secret`? | ❌ только файл | ✅ да | ⚠️ опциональная синхронизация |
+| 🔁 Автообновление при ротации | ✅ в реальном времени (шаблон + сигнал) | ⚠️ интервал опроса | ⚠️ при перезапуске pod'а |
+| 🧊 Стоимость ресурсов pod'а | ❌ sidecar на каждый pod | ✅ один контроллер | ✅ daemonset на каждый узел |
+| 🔑 Поддерживаемые методы auth | ✅ все методы Vault | ✅ все | ⚠️ только k8s |
+| 🎯 Лучше всего, когда | динамические креды, короткий TTL, сигнальные перезагрузки | большинству pod'ов нужен `envFrom`, опрос подходит | строгие правила без K8s-Secret, монтирование файлов |
+| 🚦 Сложность | 🟡 средняя | 🟢 низкая | 🟡 средняя |
 
-> 🔥 **Most teams in 2026 pick ESO** as the default and add Agent Injector only for the pods that need dynamic database creds or sub-minute rotation.
+> 🔥 **Большинство команд в 2026 выбирают ESO** по умолчанию и добавляют Agent Injector только для pod'ов, которым нужны динамические креды БД или ротация с интервалом меньше минуты.
 
 ---
 
-## 📍 Slide 17 – 🌳 Alternatives: SOPS and Sealed Secrets
+## 📍 Слайд 17 – 🌳 Альтернативы: SOPS и Sealed Secrets
 
-Not every team can run a Vault/OpenBao cluster. Two GitOps-friendly alternatives:
+Не каждая команда может запустить кластер Vault/OpenBao. Две дружественные к GitOps альтернативы:
 
-* 🔏 **Mozilla SOPS** — encrypt YAML/JSON **file-level** with AWS KMS / GCP KMS / age / PGP. Encrypted file is safe to commit. The CI/CD pipeline (or `helm-secrets` plugin) decrypts at apply time.
+* 🔏 **Mozilla SOPS** — шифрует YAML/JSON **на уровне файла** с помощью AWS KMS / GCP KMS / age / PGP. Зашифрованный файл безопасно коммитить. Конвейер CI/CD (или плагин `helm-secrets`) расшифровывает во время apply.
   ```bash
   sops --encrypt --age $AGE_RECIPIENT secrets.yaml > secrets.enc.yaml
   # commit secrets.enc.yaml, *.gitignore secrets.yaml
   ```
-* 🔒 **Sealed Secrets** (Bitnami) — a CRD + controller in-cluster. Encrypt with the controller's public key locally; only that one cluster can decrypt. Encrypted resource is safe to commit and apply.
+* 🔒 **Sealed Secrets** (Bitnami) — CRD + контроллер в кластере. Шифруйте публичным ключом контроллера локально; расшифровать может только этот один кластер. Зашифрованный ресурс безопасно коммитить и применять.
   ```bash
   kubeseal --controller-namespace=kube-system < secret.yaml > sealed.yaml
   ```
 
 | | SOPS | Sealed Secrets | OpenBao + ESO |
 |---|------|----------------|---------------|
-| 🔄 Rotation | ❌ manual re-encrypt | ❌ manual re-encrypt | ✅ central |
-| 🔍 Audit log | ❌ git history | ❌ git history | ✅ Vault audit |
-| 🌍 Multi-cluster sharing | ✅ | ❌ per-cluster key | ✅ |
-| 🎚️ Complexity | 🟢 low | 🟢 low | 🟡 medium |
+| 🔄 Ротация | ❌ ручное перешифрование | ❌ ручное перешифрование | ✅ централизованно |
+| 🔍 Журнал аудита | ❌ история git | ❌ история git | ✅ аудит Vault |
+| 🌍 Совместное использование между кластерами | ✅ | ❌ ключ на кластер | ✅ |
+| 🎚️ Сложность | 🟢 низкая | 🟢 низкая | 🟡 средняя |
 
 ---
 
-## 📍 Slide 18 – 🪞 OpenBao 2.5.0: What's New (Feb 4 2026)
+## 📍 Слайд 18 – 🪞 OpenBao 2.5.0: что нового (4 февраля 2026)
 
-* 🏷️ **Namespaces** are now free — multi-tenant secret isolation that used to be a HashiCorp Enterprise paywall feature. Each namespace gets its own policies/auth/mounts.
-* 🚀 **Horizontal read scalability** — standby Raft nodes can now answer **read** requests locally without forwarding to the leader. Read-heavy workloads (think 10K pods all polling a config secret) suddenly become cheap.
-* 🔒 **`disable_unauthed_rekey_endpoints: true` by default** — closes an unauth attack surface (CVE-class concern in older Vault).
-* 🛠️ Auto-unseal hardening for managed keys (AWS KMS / GCP KMS / Azure Key Vault).
-* 🧹 Identity-group cleanup on unseal — fixes a long-standing Vault bug where corrupted entries blocked startup.
+* 🏷️ **Namespaces** теперь бесплатны — мультитенантная изоляция секретов, которая раньше была платной функцией HashiCorp Enterprise. Каждое пространство имён получает свои политики/auth/mounts.
+* 🚀 **Горизонтальная масштабируемость чтения** — standby-узлы Raft теперь могут отвечать на **read**-запросы локально, без перенаправления лидеру. Нагрузки с интенсивным чтением (представьте 10K pod'ов, опрашивающих конфиг-секрет) внезапно становятся дешёвыми.
+* 🔒 **`disable_unauthed_rekey_endpoints: true` по умолчанию** — закрывает поверхность неаутентифицированной атаки (проблема класса CVE в старом Vault).
+* 🛠️ Усиление авто-unseal для управляемых ключей (AWS KMS / GCP KMS / Azure Key Vault).
+* 🧹 Очистка групп идентификации при unseal — исправляет давний баг Vault, когда повреждённые записи блокировали запуск.
 
-> 🔥 **Practical impact:** the `vault` CLI commands you write today against OpenBao will run unchanged on production setups at any scale. Old Vault tutorials remain ~95% accurate.
-
----
-
-## 📍 Slide 19 – 🚫 Anti-Patterns
-
-1. ❌ **`echo $PASSWORD | base64` and committing the result** — base64 is encoding, not encryption. Git history is forever.
-2. ❌ **Plain `Secret` with no etcd encryption** — anyone with an etcd snapshot owns your prod.
-3. ❌ **One Vault token per app, never rotated** — defeats the entire point of a secret manager.
-4. ❌ **Vault dev mode in production** — RAM storage, single key, auto-unseal. Process restart = total secret loss.
-5. ❌ **Long-lived ServiceAccount tokens mounted by default** — set `automountServiceAccountToken: false` on SAs that don't need Vault auth.
-6. ❌ **`vault.hashicorp.com/role: admin` on every pod** — least privilege; one role per app per environment.
-7. ❌ **No secret rotation cadence** — pick a number (30/60/90 days), automate it, audit deviations.
-8. ❌ **Putting real values in `values.yaml`** — that file lands in git via your Helm chart. Use ESO or Agent Injector, never `--set` from a CI step that logs.
+> 🔥 **Практическое влияние:** команды CLI `vault`, которые вы пишете сегодня против OpenBao, будут работать без изменений на продакшн-установках любого масштаба. Старые туториалы по Vault остаются точными примерно на 95%.
 
 ---
 
-## 📍 Slide 20 – 🧪 Detection: How Leaks Get Found
+## 📍 Слайд 19 – 🚫 Антипаттерны
 
-The good news: secret-scanning is cheap, fast, and CI-friendly.
+1. ❌ **`echo $PASSWORD | base64` и коммит результата** — base64 это кодирование, а не шифрование. История git вечна.
+2. ❌ **Обычный `Secret` без шифрования etcd** — любой со снапшотом etcd владеет вашим продакшном.
+3. ❌ **Один токен Vault на приложение, никогда не ротируется** — убивает весь смысл менеджера секретов.
+4. ❌ **Dev-режим Vault в продакшне** — хранение в RAM, один ключ, авто-unseal. Перезапуск процесса = полная потеря секретов.
+5. ❌ **Долгоживущие токены ServiceAccount, смонтированные по умолчанию** — задайте `automountServiceAccountToken: false` для SA, которым не нужна аутентификация в Vault.
+6. ❌ **`vault.hashicorp.com/role: admin` на каждом pod'е** — наименьшие привилегии; одна role на приложение на среду.
+7. ❌ **Отсутствие графика ротации секретов** — выберите число (30/60/90 дней), автоматизируйте его, аудируйте отклонения.
+8. ❌ **Настоящие значения в `values.yaml`** — этот файл попадает в git через ваш Helm chart. Используйте ESO или Agent Injector, никогда `--set` из шага CI, который логирует.
 
-* 🔍 **gitleaks**, **trufflehog**, **detect-secrets** — pre-commit hooks + CI gates. Find AWS keys, GCP service accounts, PEM keys, GH tokens.
-* 🐙 **GitHub Secret Scanning** — built into github.com; partner integrations auto-revoke leaked tokens for AWS, GCP, Slack, Stripe, …
-* 📊 **OWASP Top 10 (A07: Identification and Authentication Failures)** — explicitly calls out credential management as a top-tier risk.
+---
+
+## 📍 Слайд 20 – 🧪 Обнаружение: как находят утечки
+
+Хорошая новость: сканирование секретов дешёвое, быстрое и дружественное к CI.
+
+* 🔍 **gitleaks**, **trufflehog**, **detect-secrets** — хуки pre-commit + гейты CI. Находят AWS-ключи, сервисные аккаунты GCP, PEM-ключи, GH-токены.
+* 🐙 **GitHub Secret Scanning** — встроен в github.com; партнёрские интеграции автоматически отзывают утёкшие токены для AWS, GCP, Slack, Stripe, …
+* 📊 **OWASP Top 10 (A07: Identification and Authentication Failures)** — явно называет управление учётными данными риском верхнего уровня.
 
 ```yaml
 # .pre-commit-config.yaml
@@ -447,11 +447,11 @@ repos:
     hooks: [{id: gitleaks}]
 ```
 
-> 🔥 **Run gitleaks on every PR.** It catches the human moments. Tools beat policy.
+> 🔥 **Запускайте gitleaks на каждом PR.** Он ловит человеческие моменты. Инструменты бьют политику.
 
 ---
 
-## 📍 Slide 21 – 🗺️ Decision Tree
+## 📍 Слайд 21 – 🗺️ Дерево решений
 
 ```mermaid
 flowchart TD
@@ -464,43 +464,43 @@ flowchart TD
   Q3 -->|No| ESO[🤖 OpenBao + ESO]
 ```
 
-* 🟢 **Start small:** K8s Secret + etcd encryption gets you 80% of the way.
-* 🟡 **Add OpenBao + ESO** when you have ≥2 clusters or non-K8s consumers.
-* 🔴 **Add Agent Injector + dynamic creds** when audit/compliance demands it.
+* 🟢 **Начинайте с малого:** K8s Secret + шифрование etcd покрывает 80% пути.
+* 🟡 **Добавляйте OpenBao + ESO**, когда у вас ≥2 кластеров или есть потребители вне K8s.
+* 🔴 **Добавляйте Agent Injector + динамические креды**, когда этого требуют аудит/комплаенс.
 
 ---
 
-## 📍 Slide 22 – 🎯 Key Takeaways
+## 📍 Слайд 22 – 🎯 Ключевые выводы
 
-1. 🔓 **K8s `Secret` is base64, not encryption.** Confidentiality comes from RBAC + etcd-at-rest, not the resource itself.
-2. 🔐 **Turn on `EncryptionConfiguration`** with a KMS provider; `identity` always last.
-3. 🪦 **HashiCorp Vault went BSL in Aug 2023.** The community moved to **OpenBao** (LF / MPL-2.0). The `vault` CLI still works.
-4. 🏰 **OpenBao 2.5.0** gives you free Namespaces + horizontal read scaling.
-5. 💉 **Two injection patterns:** Agent Injector (sidecar, dynamic, signal-driven) and ESO (controller-synced K8s Secret). Pick by workload, not by hype.
-6. 🌳 **SOPS / Sealed Secrets** are valid GitOps-friendly fallbacks when you can't run a Vault cluster.
-7. 🔍 **Scan every commit** with gitleaks/trufflehog. Detection is cheaper than rotation.
+1. 🔓 **K8s `Secret` — это base64, а не шифрование.** Конфиденциальность идёт от RBAC + etcd-at-rest, а не от самого ресурса.
+2. 🔐 **Включите `EncryptionConfiguration`** с провайдером KMS; `identity` всегда последний.
+3. 🪦 **HashiCorp Vault перешёл на BSL в августе 2023.** Сообщество перешло на **OpenBao** (LF / MPL-2.0). CLI `vault` по-прежнему работает.
+4. 🏰 **OpenBao 2.5.0** даёт вам бесплатные Namespaces + горизонтальное масштабирование чтения.
+5. 💉 **Два паттерна внедрения:** Agent Injector (sidecar, динамический, сигнальный) и ESO (синхронизируемый контроллером K8s Secret). Выбирайте по нагрузке, а не по хайпу.
+6. 🌳 **SOPS / Sealed Secrets** — валидные GitOps-дружественные запасные варианты, когда вы не можете запустить кластер Vault.
+7. 🔍 **Сканируйте каждый коммит** с помощью gitleaks/trufflehog. Обнаружение дешевле ротации.
 
-> 💬 *"Security is not a product, but a process."* — Bruce Schneier
+> 💬 *"Безопасность — это не продукт, а процесс."* — Bruce Schneier
 
 ---
 
-## 📍 Slide 23 – 🚀 What Comes Next
+## 📍 Слайд 23 – 🚀 Что дальше
 
-**📚 Next lecture: *ConfigMaps & Persistent Volumes*** — non-sensitive configuration, mounting strategies, and how stateful apps survive pod restarts.
+**📚 Следующая лекция: *ConfigMap'ы и постоянные тома*** — нечувствительная конфигурация, стратегии монтирования и то, как stateful-приложения выживают при перезапусках pod'ов.
 
-* 📁 `ConfigMap` vs `Secret` — when each is the right answer
-* 💾 PersistentVolume / PersistentVolumeClaim / StorageClass — dynamic provisioning
-* 🔧 Mount strategies: subPath, projected volumes, immutable configs
-* 🗂️ StatefulSets vs Deployments — when ordering matters
+* 📁 `ConfigMap` vs `Secret` — когда что является правильным ответом
+* 💾 PersistentVolume / PersistentVolumeClaim / StorageClass — динамический провижининг
+* 🔧 Стратегии монтирования: subPath, projected volumes, неизменяемые конфиги
+* 🗂️ StatefulSets vs Deployments — когда важен порядок
 
-**🔬 Lab 11 deliverables:**
-* Create an `app-credentials` Secret with `kubectl create secret`, view + decode it
-* Add `templates/secrets.yaml` to your Lab 10 chart, inject via `envFrom`
-* Install **OpenBao** in dev mode via the OpenBao Helm chart
-* Enable KV-v2 + Kubernetes auth + a read policy + a role bound to your SA
-* Add Vault Agent annotations to your Deployment; verify `/vault/secrets/...` appears in the pod
-* Document everything in `k8s/SECRETS.md`
-* **Bonus (+2.5 pts):** custom `agent-inject-template-*` rendering a `.env`, named template in `_helpers.tpl`, document the refresh mechanism
+**🔬 Результаты лабораторной 11:**
+* Создать Secret `app-credentials` через `kubectl create secret`, просмотреть + декодировать его
+* Добавить `templates/secrets.yaml` в ваш chart из лабораторной 10, внедрить через `envFrom`
+* Установить **OpenBao** в dev-режиме через OpenBao Helm chart
+* Включить KV-v2 + Kubernetes auth + политику чтения + role, привязанную к вашему SA
+* Добавить аннотации Vault Agent в ваш Deployment; проверить, что `/vault/secrets/...` появляется в pod'е
+* Задокументировать всё в `k8s/SECRETS.md`
+* **Бонус (+2.5 балла):** кастомный `agent-inject-template-*`, рендерящий `.env`, именованный шаблон в `_helpers.tpl`, документирование механизма обновления
 
 ```mermaid
 flowchart LR
@@ -509,21 +509,21 @@ flowchart LR
   Lab12 --> Lab13[🔄 Lab 13: ArgoCD]
 ```
 
-> 🌊 You've stopped putting passwords in git. Now let's configure everything else.
+> 🌊 Вы перестали класть пароли в git. Теперь давайте настроим всё остальное.
 
 ---
 
-## 📚 Resources
+## 📚 Ресурсы
 
-* 📕 *Container Security* — Liz Rice (O'Reilly, 2020) — chapter on Secrets and threat model
+* 📕 *Container Security* — Liz Rice (O'Reilly, 2020) — глава о Secrets и модели угроз
 * 📕 *Kubernetes Security and Observability* — Brendan Creane & Amit Gupta (O'Reilly, 2021)
-* 🌐 [openbao.org/docs](https://openbao.org/docs/) — OpenBao official docs
-* 🌐 [OpenBao 2.5.0 release notes](https://openbao.org/community/release-notes/2-5-0/) — Feb 4 2026
-* 🌐 [external-secrets.io](https://external-secrets.io/) — ESO docs + provider list
-* 🌐 [kubernetes.io/docs/concepts/configuration/secret](https://kubernetes.io/docs/concepts/configuration/secret/) — K8s Secrets reference
-* 🌐 [kubernetes.io/docs/tasks/administer-cluster/encrypt-data](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/) — encryption-at-rest setup
-* 🌐 [getsops.io](https://getsops.io/) — SOPS docs
+* 🌐 [openbao.org/docs](https://openbao.org/docs/) — официальные документы OpenBao
+* 🌐 [OpenBao 2.5.0 release notes](https://openbao.org/community/release-notes/2-5-0/) — 4 февраля 2026
+* 🌐 [external-secrets.io](https://external-secrets.io/) — документы ESO + список провайдеров
+* 🌐 [kubernetes.io/docs/concepts/configuration/secret](https://kubernetes.io/docs/concepts/configuration/secret/) — справочник по K8s Secrets
+* 🌐 [kubernetes.io/docs/tasks/administer-cluster/encrypt-data](https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/) — настройка шифрования в состоянии покоя
+* 🌐 [getsops.io](https://getsops.io/) — документы SOPS
 * 🌐 [github.com/bitnami-labs/sealed-secrets](https://github.com/bitnami-labs/sealed-secrets) — Sealed Secrets
-* 🎥 *Kubernetes Secrets Are Not Secret* — KubeCon talk by Liz Rice (covers etcd attack surface)
+* 🎥 *Kubernetes Secrets Are Not Secret* — доклад Liz Rice на KubeCon (охватывает поверхность атаки etcd)
 
-**🎓 Quiz:** Post-lecture quiz feeds the weeks 10-12 leaderboard window.
+**🎓 Квиз:** квиз после лекции идёт в зачёт окна лидерборда недель 10-12.

@@ -1,100 +1,100 @@
-# Lab 10 — Helm Package Manager
+# Лабораторная работа 10 — Пакетный менеджер Helm
 
 ![difficulty](https://img.shields.io/badge/difficulty-intermediate-yellow)
 ![topic](https://img.shields.io/badge/topic-Helm-blue)
 ![points](https://img.shields.io/badge/points-10%2B2-orange)
 ![tech](https://img.shields.io/badge/tech-Helm%204-informational)
 
-> **Goal:** Convert your Lab 9 Kubernetes manifests into a hand-written Helm 4 chart that ships through dev / staging / prod with one value file per environment, runs a lifecycle hook, and (bonus) is publishable to GHCR over OCI.
-> **Deliverable:** A PR from `lab10` adding `k8s/lab10-app/` (chart) and `k8s/lab10-app/HELM.md` (your report).
+> **Цель:** преобразовать ваши манифесты Kubernetes из лабораторной 9 в написанный вручную чарт Helm 4, который проходит через dev / staging / prod с одним файлом values на окружение, запускает хук жизненного цикла и (бонус) может быть опубликован в GHCR через OCI.
+> **Результат сдачи:** PR из ветки `lab10`, добавляющий `k8s/lab10-app/` (чарт) и `k8s/lab10-app/HELM.md` (ваш отчёт).
 
 ---
 
-## Overview
+## Обзор
 
-In Lab 9 you wrote four raw manifests (web Deployment + Service, echo Deployment + Service). For one environment that's fine — for three, you'd be copy-editing YAML and praying nothing drifts.
+В лабораторной 9 вы написали четыре голых манифеста (web Deployment + Service, echo Deployment + Service). Для одного окружения это нормально — для трёх вы бы копипастили YAML и молились, чтобы ничего не разъехалось.
 
-This lab pulls every hardcoded value out of those manifests into a **chart** with a **values file per environment**. The skill being graded is **template authoring**: writing `Chart.yaml`, `values.yaml`, `templates/deployment.yaml`, `templates/service.yaml`, `templates/_helpers.tpl`, and one hook — from scratch. Not `helm create`-and-edit. From scratch.
+Эта лабораторная вытаскивает каждое жёстко зашитое значение из этих манифестов в **чарт** с **файлом values на окружение**. Оценивается навык **написания шаблонов**: написание `Chart.yaml`, `values.yaml`, `templates/deployment.yaml`, `templates/service.yaml`, `templates/_helpers.tpl` и одного хука — с нуля. Не `helm create`-и-правь. С нуля.
 
-> ⚠️ **Scope:** No subcharts, no library charts, no `values.schema.json`. Just chart anatomy + values hierarchy + one hook + (bonus) an OCI push.
+> ⚠️ **Область:** никаких подчартов, библиотечных чартов, `values.schema.json`. Только анатомия чарта + иерархия values + один хук + (бонус) OCI push.
 
-**What you'll practice:**
-- Helm 4 chart anatomy: `Chart.yaml`, `values.yaml`, `templates/`, `_helpers.tpl`
-- Go templates + Sprig (`include`, `nindent`, `default`, `toYaml`, `printf`, `trunc`, `quote`)
-- The release lifecycle: `install / upgrade / rollback / list / history / uninstall`
-- Multi-environment delivery via a values hierarchy and **`-f a -f b`** layering
-- Lifecycle hooks (`pre-install` / `pre-upgrade`) with weights and delete policies
-- Publishing charts as OCI artifacts to GHCR
+**Что вы отработаете:**
+- Анатомия чарта Helm 4: `Chart.yaml`, `values.yaml`, `templates/`, `_helpers.tpl`
+- Go-шаблоны + Sprig (`include`, `nindent`, `default`, `toYaml`, `printf`, `trunc`, `quote`)
+- Жизненный цикл релиза: `install / upgrade / rollback / list / history / uninstall`
+- Доставка в несколько окружений через иерархию values и наслоение **`-f a -f b`**
+- Хуки жизненного цикла (`pre-install` / `pre-upgrade`) с весами и политиками удаления
+- Публикация чартов как артефактов OCI в GHCR
 
-> 📚 Pairs with **Lecture 10 — Helm Package Management**. Re-read slides 5–11 (chart anatomy, templates, `_helpers.tpl`, lifecycle, multi-env, hooks) before you start.
-
----
-
-## Project State
-
-**You should have from previous labs:**
-- A k3d cluster on Kubernetes 1.36 (Lab 9 — `k3d cluster create devops ...`)
-- Your **Lab 2 web image** in a public registry (Docker Hub / GHCR)
-- Lab 9 manifests in `k8s/`: `web-deployment.yaml`, `web-service.yaml`, `echo-deployment.yaml`, `echo-service.yaml`
-
-**This lab adds:**
-- `k8s/lab10-app/` — a hand-written Helm 4 chart that **replaces** those four manifests
-- `k8s/lab10-app/values-prod.yaml` (and optionally `-dev`, `-staging`) — per-environment deltas
-- `k8s/lab10-app/templates/hooks/db-migrate.yaml` — one pre-install/pre-upgrade hook
-- `k8s/lab10-app/HELM.md` — your submission report
-
-By Lab 13 ArgoCD will deploy this chart through GitOps; by Lab 14 Argo Rollouts will replace the Deployment template you write here. So the template hygiene you build this week outlives Lab 10.
+> 📚 В паре с **лекцией 10 — Helm Package Management**. Перечитайте слайды 5–11 (анатомия чарта, шаблоны, `_helpers.tpl`, жизненный цикл, мульти-окружения, хуки) перед началом.
 
 ---
 
-## Setup
+## Состояние проекта
+
+**У вас должно быть из предыдущих лабораторных:**
+- Кластер k3d на Kubernetes 1.36 (лабораторная 9 — `k3d cluster create devops ...`)
+- Ваш **образ web из лабораторной 2** в публичном реестре (Docker Hub / GHCR)
+- Манифесты из лабораторной 9 в `k8s/`: `web-deployment.yaml`, `web-service.yaml`, `echo-deployment.yaml`, `echo-service.yaml`
+
+**Эта лабораторная добавляет:**
+- `k8s/lab10-app/` — написанный вручную чарт Helm 4, который **заменяет** эти четыре манифеста
+- `k8s/lab10-app/values-prod.yaml` (и опционально `-dev`, `-staging`) — различия по окружениям
+- `k8s/lab10-app/templates/hooks/db-migrate.yaml` — один хук pre-install/pre-upgrade
+- `k8s/lab10-app/HELM.md` — ваш отчёт о сдаче
+
+К лабораторной 13 ArgoCD развернёт этот чарт через GitOps; к лабораторной 14 Argo Rollouts заменит шаблон Deployment, который вы напишете здесь. Так что гигиена шаблонов, которую вы выстроите на этой неделе, переживёт лабораторную 10.
+
+---
+
+## Настройка
 
 ```bash
 helm version            # must report v4.1.x (course pins to 4.1.4)
 kubectl get nodes       # your Lab 9 cluster must be up
 ```
 
-> **Helm 3 vs Helm 4:** Helm 3 is in support-mode only (bug fixes through July 8 2026, security fixes through November 11 2026). The course standardizes on **Helm 4**. Note that `apiVersion: v2` in `Chart.yaml` is still correct on Helm 4 — that header is the Helm-3-and-later chart-format version, **not** the Helm binary version. `apiVersion: v1` is Helm 2 only.
+> **Helm 3 vs Helm 4:** Helm 3 находится только в режиме поддержки (исправления багов до 8 июля 2026, исправления безопасности до 11 ноября 2026). Курс стандартизирован на **Helm 4**. Учтите, что `apiVersion: v2` в `Chart.yaml` по-прежнему корректен в Helm 4 — этот заголовок — версия формата чарта Helm-3-и-новее, **а не** версия бинарника Helm. `apiVersion: v1` — только для Helm 2.
 
-Install instructions: <https://helm.sh/docs/intro/install/>.
+Инструкции по установке: <https://helm.sh/docs/intro/install/>.
 
-You will write every file under `k8s/lab10-app/` yourself — **do not run `helm create`** (see Common Pitfalls).
+Вы напишете каждый файл в `k8s/lab10-app/` сами — **не запускайте `helm create`** (см. Частые ловушки).
 
 ---
 
-## Task 1 — Helm fundamentals & setup (1 pt)
+## Задача 1 — Основы Helm и настройка (1 балл)
 
-### 1.1 — Install Helm 4 and inspect a real chart
+### 1.1 — Установите Helm 4 и изучите настоящий чарт
 
-`YOUR TASK`: install (or upgrade to) Helm 4.1.x, then pull metadata and default values from an OCI-hosted public chart **without installing it**:
+`ВАША ЗАДАЧА`: установите (или обновите до) Helm 4.1.x, затем вытяните метаданные и значения по умолчанию из публичного чарта, размещённого в OCI, **не устанавливая его**:
 
 ```bash
 helm show chart  oci://registry-1.docker.io/bitnamicharts/nginx
 helm show values oci://registry-1.docker.io/bitnamicharts/nginx | head -40
 ```
 
-Look at the shape: `apiVersion`, `name`, `version`, `appVersion`, `dependencies`; in `values.yaml` notice how every numeric/string knob is exposed.
+Посмотрите на форму: `apiVersion`, `name`, `version`, `appVersion`, `dependencies`; в `values.yaml` обратите внимание, как выставлен каждый числовой/строковый параметр.
 
-### 1.2 — Explain the three concepts in your own words
+### 1.2 — Объясните три понятия своими словами
 
-In `HELM.md`, write 2–3 sentences each for **Chart**, **Release**, **Values**. Don't copy the docs — you must be able to answer them at a viva. Hints:
+В `HELM.md` напишите по 2–3 предложения на **Chart**, **Release**, **Values**. Не копируйте документацию — вы должны уметь ответить на них на защите. Подсказки:
 
-- *Chart* is the package on disk; *Release* is one running instance of it; *Values* fill the template.
-- Helm 4 stores release state in a `helm.sh/release.v1` Secret in the release's namespace (Tiller is long gone — Helm 2).
+- *Chart* — это пакет на диске; *Release* — один запущенный его экземпляр; *Values* заполняют шаблон.
+- Helm 4 хранит состояние релиза в Secret `helm.sh/release.v1` в пространстве имён релиза (Tiller давно канул в лету — это Helm 2).
 
-### 1.3 — Proof of work
+### 1.3 — Подтверждение работы
 
-Paste into `HELM.md`:
+Вставьте в `HELM.md`:
 
-- `helm version` output showing v4.1.x
-- The first ~20 lines of one of the `helm show` calls above
-- Your 2–3-sentence explanations of Chart vs Release vs Values
+- Вывод `helm version`, показывающий v4.1.x
+- Первые ~20 строк одного из вызовов `helm show` выше
+- Ваши объяснения Chart vs Release vs Values в 2–3 предложениях
 
 ---
 
-## Task 2 — Build the chart (3 pts)
+## Задача 2 — Соберите чарт (3 балла)
 
-**Objective:** Write the chart from scratch. The skeleton below is the **directory shape** you must produce. **Do not** run `helm create`; you'd ship boilerplate references to a `serviceaccount.yaml` you didn't write, then break `helm lint` the moment you edit `values.yaml` (see Common Pitfalls).
+**Цель:** написать чарт с нуля. Скелет ниже — это **форма каталогов**, которую вы должны получить. **Не** запускайте `helm create`; вы бы поставили шаблонные ссылки на `serviceaccount.yaml`, который не писали, а потом сломали бы `helm lint` в момент правки `values.yaml` (см. Частые ловушки).
 
 ```
 k8s/lab10-app/
@@ -114,7 +114,7 @@ k8s/lab10-app/
 
 ### 2.1 — `Chart.yaml`
 
-`YOUR TASK`: fill in the metadata. Both `version` (chart SemVer — bump on chart changes) and `appVersion` (image-side version string — bump on image changes) matter; they evolve independently. `kubeVersion` makes Helm refuse to install against an older cluster.
+`ВАША ЗАДАЧА`: заполните метаданные. Важны и `version` (SemVer чарта — бампайте при изменениях чарта), и `appVersion` (строка версии на стороне образа — бампайте при изменениях образа); они эволюционируют независимо. `kubeVersion` заставляет Helm отказаться от установки на более старый кластер.
 
 ```yaml
 apiVersion: ___                  # YOUR TASK: chart-format version (Helm 3/4 expects this value)
@@ -132,9 +132,9 @@ kubeVersion: "___"               # YOUR TASK: a range, e.g. ">=1.33.0" — refus
 
 ### 2.2 — `values.yaml`
 
-`YOUR TASK`: list every value your templates will reference, with a sensible default. **Every hardcoded number/string from your Lab 9 manifests becomes a value here.** Both `web` and `echo` need their own blocks.
+`ВАША ЗАДАЧА`: перечислите каждое значение, на которое будут ссылаться ваши шаблоны, с разумным значением по умолчанию. **Каждое жёстко зашитое число/строка из манифестов лабораторной 9 становится значением здесь.** И `web`, и `echo` нуждаются в своих собственных блоках.
 
-The minimum surface (you may add more):
+Минимальная поверхность (можете добавить больше):
 
 ```yaml
 # YOUR TASK: fill every default. The keys below are the contract between
@@ -201,16 +201,16 @@ hooks:
 
 ### 2.3 — `templates/_helpers.tpl`
 
-Named templates avoid copy-pasting label blocks across every manifest. You will define **four**: `name`, `fullname`, `labels`, `selectorLabels`. They are the muscle memory of Helm; you'll write them in every chart for the rest of your career.
+Именованные шаблоны позволяют избежать копипаста блоков labels в каждом манифесте. Вы определите **четыре**: `name`, `fullname`, `labels`, `selectorLabels`. Это мышечная память Helm; вы будете писать их в каждом чарте до конца карьеры.
 
-`YOUR TASK`: implement the bodies. The function shape is given — fill the body of each `define` block so that:
+`ВАША ЗАДАЧА`: реализуйте тела. Форма функции дана — заполните тело каждого блока `define` так, чтобы:
 
-| Template | What it must return |
+| Шаблон | Что он должен возвращать |
 |---|---|
-| `lab10-app.name` | The chart name (or `nameOverride` if a user sets one), truncated to 63 chars (K8s label limit) and with any trailing `-` stripped. |
-| `lab10-app.fullname` | A unique-per-release name: `<release-name>-<chart-name>` (or `nameOverride` if set), truncated to 63, trailing `-` stripped. This is what most metadata.name fields use. |
-| `lab10-app.labels` | The full label set: `helm.sh/chart`, every selector label (include `selectorLabels`), `app.kubernetes.io/version`, `app.kubernetes.io/managed-by`. |
-| `lab10-app.selectorLabels` | A **strict subset** of `labels`: only `app.kubernetes.io/name` and `app.kubernetes.io/instance`. Selectors are immutable after creation — never put `version` here (see Common Pitfalls). |
+| `lab10-app.name` | Имя чарта (или `nameOverride`, если пользователь его задал), усечённое до 63 символов (лимит label в K8s) и с удалённым завершающим `-`. |
+| `lab10-app.fullname` | Уникальное для релиза имя: `<release-name>-<chart-name>` (или `nameOverride`, если задан), усечённое до 63, с удалённым завершающим `-`. Именно это используют большинство полей metadata.name. |
+| `lab10-app.labels` | Полный набор labels: `helm.sh/chart`, каждый label селектора (включая `selectorLabels`), `app.kubernetes.io/version`, `app.kubernetes.io/managed-by`. |
+| `lab10-app.selectorLabels` | **Строгое подмножество** `labels`: только `app.kubernetes.io/name` и `app.kubernetes.io/instance`. Селекторы неизменяемы после создания — никогда не кладите сюда `version` (см. Частые ловушки). |
 
 ```handlebars
 {{/* YOUR TASK: return the chart name, truncated to 63 chars, no trailing dash */}}
@@ -243,13 +243,13 @@ Named templates avoid copy-pasting label blocks across every manifest. You will 
 {{- end }}
 ```
 
-Reference functions you'll need (all from Sprig): `default`, `trunc`, `trimSuffix`, `printf`, `replace`, `quote`. See [Sprig docs](https://masterminds.github.io/sprig/) and [Chart Template Guide](https://helm.sh/docs/chart_template_guide/).
+Функции, на которые будете ссылаться (все из Sprig): `default`, `trunc`, `trimSuffix`, `printf`, `replace`, `quote`. См. [документацию Sprig](https://masterminds.github.io/sprig/) и [Chart Template Guide](https://helm.sh/docs/chart_template_guide/).
 
 ### 2.4 — `templates/deployment.yaml` (web)
 
-`YOUR TASK`: templatize your Lab 9 web Deployment. The YAML shape is given so you don't reinvent the wheel — each `{{ ___ }}` is a token you must fill (and many of those will need pipelines like `| nindent 4` or `| default ...`).
+`ВАША ЗАДАЧА`: превратите в шаблон ваш web Deployment из лабораторной 9. Форма YAML дана, чтобы вы не изобретали велосипед — каждый `{{ ___ }}` — это токен, который вы должны заполнить (и многие из них потребуют конвейеров вроде `| nindent 4` или `| default ...`).
 
-> 💡 **Name web and echo distinctly.** Both Deployments are in the same release; if `metadata.name` resolves to the same value on both, the second `helm install` errors out with a conflict. Convention: append a component suffix to the fullname (e.g. `{{ include "lab10-app.fullname" . }}-web` here, `-echo` on the echo manifests in 2.6). Lab 11 will reference `deploy/lab10-app-web` directly — keep the suffix.
+> 💡 **Именуйте web и echo различно.** Оба Deployment находятся в одном релизе; если `metadata.name` разрешается в одно и то же значение на обоих, второй `helm install` завершится ошибкой конфликта. Соглашение: добавьте суффикс компонента к fullname (например, `{{ include "lab10-app.fullname" . }}-web` здесь, `-echo` в манифестах echo в 2.6). Лабораторная 11 будет ссылаться напрямую на `deploy/lab10-app-web` — сохраните суффикс.
 
 ```yaml
 apiVersion: apps/v1
@@ -293,11 +293,11 @@ spec:
           {{- end }}
 ```
 
-> **`indent` vs `nindent`:** `nindent N` = newline + indent by N spaces. `indent N` = indent only. When a `{{- ... -}}` action sits on its own line and consumed the preceding newline, `indent` produces invalid YAML. Use `nindent` 9 times out of 10.
+> **`indent` vs `nindent`:** `nindent N` = перевод строки + отступ в N пробелов. `indent N` = только отступ. Когда действие `{{- ... -}}` стоит на своей строке и поглотило предыдущий перевод строки, `indent` даёт невалидный YAML. Используйте `nindent` в 9 случаях из 10.
 
 ### 2.5 — `templates/service.yaml` (web)
 
-`YOUR TASK`: same drill, much shorter.
+`ВАША ЗАДАЧА`: то же упражнение, гораздо короче.
 
 ```yaml
 apiVersion: v1
@@ -319,18 +319,18 @@ spec:
 
 ### 2.6 — `templates/echo-deployment.yaml` + `templates/echo-service.yaml`
 
-`YOUR TASK`: same pattern, but for the echo sidecar. Two notable differences:
+`ВАША ЗАДАЧА`: тот же шаблон, но для sidecar-сервиса echo. Два заметных отличия:
 
-1. Image comes from `.Values.echo.image.repository` + `.Values.echo.image.tag` (no `default .Chart.AppVersion` — echo's image is independent of your app's `appVersion`).
-2. Use a different label discriminator (e.g. `app.kubernetes.io/component: echo`) on the pod template + Service selector so the **web** Service doesn't accidentally select echo pods. You can either:
-   - Extend your `selectorLabels` helper with an optional component (pass `.Values.echo` into `include`), **or**
-   - Hand-write a small additional selector key in this manifest only.
+1. Образ берётся из `.Values.echo.image.repository` + `.Values.echo.image.tag` (без `default .Chart.AppVersion` — образ echo независим от `appVersion` вашего приложения).
+2. Используйте другой дискриминатор label (например, `app.kubernetes.io/component: echo`) в шаблоне pod'а + селекторе Service, чтобы Service **web** случайно не выбирал pod'ы echo. Вы можете либо:
+   - Расширить ваш хелпер `selectorLabels` опциональным компонентом (передав `.Values.echo` в `include`), **либо**
+   - Вручную написать небольшой дополнительный ключ селектора только в этом манифесте.
 
-Take a moment to decide which — both are valid.
+Подумайте минуту, какой выбрать — оба допустимы.
 
-### 2.7 — Validate, render, install
+### 2.7 — Проверьте, отрендерьте, установите
 
-Run, in this order: `helm lint <chart>`, `helm template <release> <chart>` (eyeball the rendered YAML), `helm install <release> <chart> --dry-run --debug`, then a real `helm install --create-namespace` into a fresh namespace. Finish with `helm list` (expect `REVISION 1`) and `kubectl get deploy,svc,pods` to confirm both pods are Ready.
+Запустите по порядку: `helm lint <chart>`, `helm template <release> <chart>` (просмотрите отрендеренный YAML), `helm install <release> <chart> --dry-run --debug`, затем настоящий `helm install --create-namespace` в свежее пространство имён. Завершите `helm list` (ожидайте `REVISION 1`) и `kubectl get deploy,svc,pods`, чтобы подтвердить, что оба pod'а Ready.
 
 ```bash
 # Release name MUST be `lab10-app` (matches chart name). Lab 11 references `deploy/lab10-app-web`;
@@ -342,38 +342,38 @@ helm install lab10-app k8s/lab10-app -n helm-demo --create-namespace
 # expected (verify with `kubectl get deploy -n helm-demo`): deploy/lab10-app-web and deploy/lab10-app-echo
 ```
 
-### 2.8 — Proof of work
+### 2.8 — Подтверждение работы
 
-Paste into `HELM.md`:
+Вставьте в `HELM.md`:
 
-- `helm lint k8s/lab10-app` output (must say `0 chart(s) failed`)
-- The first ~30 lines of `helm template lab10-app k8s/lab10-app` showing your values flowing into the rendered Deployment (image, replicas, probes, resources)
-- `helm list -n helm-demo` showing **REVISION 1** for release `lab10-app`
-- `kubectl get deploy,svc,pods -n helm-demo` showing both web and echo pods Ready (deploy names: `lab10-app-web`, `lab10-app-echo`)
+- Вывод `helm lint k8s/lab10-app` (должен сказать `0 chart(s) failed`)
+- Первые ~30 строк `helm template lab10-app k8s/lab10-app`, показывающие, как ваши значения попадают в отрендеренный Deployment (образ, реплики, пробы, ресурсы)
+- `helm list -n helm-demo`, показывающий **REVISION 1** для релиза `lab10-app`
+- `kubectl get deploy,svc,pods -n helm-demo`, показывающий pod'ы web и echo Ready (имена deploy: `lab10-app-web`, `lab10-app-echo`)
 
 ---
 
-## Task 3 — Multi-environment values (3 pts)
+## Задача 3 — Values для нескольких окружений (3 балла)
 
-**Objective:** Drive ≥ 2 environments from one chart using a base + override values hierarchy.
+**Цель:** управлять ≥ 2 окружениями из одного чарта, используя иерархию base + override.
 
-### 3.1 — Create `values-prod.yaml` (and optionally `values-dev.yaml` / `values-staging.yaml`)
+### 3.1 — Создайте `values-prod.yaml` (и опционально `values-dev.yaml` / `values-staging.yaml`)
 
-`YOUR TASK`: write a **deltas-only** override file — only the keys that differ from `values.yaml`. Suggested shape:
+`ВАША ЗАДАЧА`: напишите файл override **только с различиями** — только ключи, которые отличаются от `values.yaml`. Предлагаемая форма:
 
-| | dev (defaults in `values.yaml`) | prod (`values-prod.yaml`) |
+| | dev (значения по умолчанию в `values.yaml`) | prod (`values-prod.yaml`) |
 |---|---|---|
 | `replicaCount` | 1 | 4 |
-| `image.tag` | `""` (→ `appVersion`) | a pinned SemVer, e.g. `v1.2.0` |
+| `image.tag` | `""` (→ `appVersion`) | закреплённый SemVer, например `v1.2.0` |
 | `service.type` | `NodePort` | `LoadBalancer` |
 | `resources.requests.cpu` | `100m` | `500m` |
 | `resources.limits.memory` | `256Mi` | `1Gi` |
 
-For ≥ 3 envs, add `values-staging.yaml` between them.
+Для ≥ 3 окружений добавьте `values-staging.yaml` между ними.
 
-### 3.2 — Upgrade an existing release with a layered values hierarchy
+### 3.2 — Обновите существующий релиз с наслоённой иерархией values
 
-This is the **headline proof** of Task 3 — the same chart, the same release, going from REVISION 1 to REVISION 2 because `-f` layered a prod override on top of the base.
+Это **главное доказательство** задачи 3 — тот же чарт, тот же релиз, переход с REVISION 1 на REVISION 2 потому, что `-f` наслоил prod-override поверх базы.
 
 ```bash
 helm upgrade lab10-app k8s/lab10-app -n helm-demo \
@@ -383,42 +383,42 @@ helm upgrade lab10-app k8s/lab10-app -n helm-demo \
 # expected: deploy/lab10-app-web spec.replicas = your prod override (was 1 at REV 1)
 ```
 
-Then run `helm list`, `kubectl get deploy lab10-app-web -n helm-demo -o jsonpath='{.spec.replicas}'`, and `helm history` to capture the evidence.
+Затем запустите `helm list`, `kubectl get deploy lab10-app-web -n helm-demo -o jsonpath='{.spec.replicas}'` и `helm history`, чтобы зафиксировать доказательства.
 
-> **Values precedence (lowest → highest):**
-> 1. `values.yaml` (chart default, **always loaded** — you don't have to pass it explicitly)
-> 2. Each `-f file.yaml` in order — later files override earlier ones
-> 3. `--set key=value` on the CLI
+> **Приоритет values (от низшего → высшего):**
+> 1. `values.yaml` (по умолчанию чарта, **загружается всегда** — его не нужно передавать явно)
+> 2. Каждый `-f file.yaml` по порядку — более поздние файлы переопределяют более ранние
+> 3. `--set key=value` в CLI
 >
-> So `-f values.yaml -f values-prod.yaml --set replicaCount=10` ends with 10 replicas.
+> Так что `-f values.yaml -f values-prod.yaml --set replicaCount=10` завершится с 10 репликами.
 
-### 3.3 — Render a per-env diff without a cluster
+### 3.3 — Отрендерьте разницу по окружениям без кластера
 
-`YOUR TASK`: use `helm template` against the chart **without** and **with** `-f values-prod.yaml`, then `diff` the two outputs. The visible delta is your proof the override file did something — no cluster required. Capture the first ~20 diff lines in `HELM.md`.
+`ВАША ЗАДАЧА`: используйте `helm template` против чарта **без** и **с** `-f values-prod.yaml`, затем `diff` два вывода. Видимая разница — ваше доказательство, что файл override что-то сделал — кластер не нужен. Зафиксируйте первые ~20 строк diff в `HELM.md`.
 
-### 3.4 — Rollback
+### 3.4 — Откат
 
-`YOUR TASK`: `helm rollback lab10-app 1 -n helm-demo`, then re-query the deployment's replica count — it must return to the dev default. Capture `helm history` showing REVISION 3 with the rollback description.
+`ВАША ЗАДАЧА`: `helm rollback lab10-app 1 -n helm-demo`, затем снова запросите число реплик у deployment — оно должно вернуться к значению dev по умолчанию. Зафиксируйте `helm history`, показывающий REVISION 3 с описанием отката.
 
-### 3.5 — Proof of work
+### 3.5 — Подтверждение работы
 
-Paste into `HELM.md`:
+Вставьте в `HELM.md`:
 
-- The contents of `values-prod.yaml` (deltas only — should be short)
-- `helm list -n helm-demo` **at REVISION 2**, captured after the upgrade
-- `kubectl get deploy lab10-app-web -n helm-demo -o jsonpath='{.spec.replicas}'` returning the prod value
-- `helm history lab10-app -n helm-demo` showing REVISION 1 superseded by REVISION 2
-- The first 20 lines of the `diff` from 3.3 — the visible delta between rendered envs
+- Содержимое `values-prod.yaml` (только различия — должно быть коротко)
+- `helm list -n helm-demo` **на REVISION 2**, снятый после обновления
+- `kubectl get deploy lab10-app-web -n helm-demo -o jsonpath='{.spec.replicas}'`, возвращающий prod-значение
+- `helm history lab10-app -n helm-demo`, показывающий, что REVISION 1 заменён REVISION 2
+- Первые 20 строк `diff` из 3.3 — видимую разницу между отрендеренными окружениями
 
 ---
 
-## Task 4 — Lifecycle hooks (2 pts)
+## Задача 4 — Хуки жизненного цикла (2 балла)
 
-**Objective:** Add **one** Job hook that runs at `pre-install` AND `pre-upgrade` (e.g. a fake DB migration), ordered by `hook-weight`, cleaned up by `hook-delete-policy`.
+**Цель:** добавьте **один** хук Job, который запускается на `pre-install` И `pre-upgrade` (например, фиктивная миграция БД), упорядоченный через `hook-weight` и очищаемый через `hook-delete-policy`.
 
-### 4.1 — Write `templates/hooks/db-migrate.yaml`
+### 4.1 — Напишите `templates/hooks/db-migrate.yaml`
 
-The four annotation keys are the entire hook contract — the rest is a normal `batch/v1` Job. `YOUR TASK`: write the file. The skeleton:
+Четыре ключа аннотаций — это весь контракт хука, остальное — обычный Job `batch/v1`. `ВАША ЗАДАЧА`: напишите файл. Скелет:
 
 ```yaml
 {{- if .Values.hooks.dbMigrate.enabled }}
@@ -449,71 +449,71 @@ spec:
 {{- end }}
 ```
 
-The **four annotation keys** you must set (and what they do):
+**Четыре ключа аннотаций**, которые вы должны задать (и что они делают):
 
-| Annotation | Required value here | What it does |
+| Аннотация | Требуемое значение здесь | Что она делает |
 |---|---|---|
-| `helm.sh/hook` | `pre-install,pre-upgrade` | When to run. Comma-separated for multiple points. |
-| `helm.sh/hook-weight` | A quoted string like `"-5"` | Ordering among hooks at the same point. Lower runs first; ties broken alphabetically. **Must be a quoted string** — Helm parses it as a string and converts internally. |
-| `helm.sh/hook-delete-policy` | `before-hook-creation,hook-succeeded` | When to remove the hook resource. Without this, failed Jobs pile up forever — `helm uninstall` does NOT delete hook resources. |
-| (none — the resource is the Job itself) | — | The hook IS a normal Job, just not part of the regular release. |
+| `helm.sh/hook` | `pre-install,pre-upgrade` | Когда запускать. Через запятую для нескольких точек. |
+| `helm.sh/hook-weight` | Строка в кавычках вроде `"-5"` | Порядок среди хуков в одной точке. Меньшее значение запускается первым; при равенстве — по алфавиту. **Должно быть строкой в кавычках** — Helm парсит её как строку и конвертирует внутри. |
+| `helm.sh/hook-delete-policy` | `before-hook-creation,hook-succeeded` | Когда удалять ресурс хука. Без этого неудачные Job'ы копятся навсегда — `helm uninstall` НЕ удаляет ресурсы хуков. |
+| (нет — ресурс и есть сам Job) | — | Хук — это обычный Job, просто не часть регулярного релиза. |
 
-### 4.2 — Verify the hook fires on install AND upgrade
+### 4.2 — Проверьте, что хук срабатывает на install И upgrade
 
-`YOUR TASK`: uninstall the release for a clean slate, then re-install. During the install, run `kubectl get jobs -n helm-demo` (the hook Job should appear) and `kubectl logs job/<hook-job>` to capture your `running pre-install migration` echo. Then `helm upgrade` with `-f values-prod.yaml` and confirm the **same hook fires again** at `pre-upgrade`. Finally, re-query jobs — `before-hook-creation,hook-succeeded` should have deleted the previous one.
+`ВАША ЗАДАЧА`: удалите релиз для чистого старта, затем установите заново. Во время установки запустите `kubectl get jobs -n helm-demo` (Job хука должен появиться) и `kubectl logs job/<hook-job>`, чтобы зафиксировать ваш echo `running pre-install migration`. Затем сделайте `helm upgrade` с `-f values-prod.yaml` и подтвердите, что **тот же хук срабатывает снова** на `pre-upgrade`. Наконец, снова запросите jobs — `before-hook-creation,hook-succeeded` должны были удалить предыдущий.
 
-### 4.3 — Proof of work
+### 4.3 — Подтверждение работы
 
-Paste into `HELM.md`:
+Вставьте в `HELM.md`:
 
-- Your `db-migrate.yaml` annotations block (the four-key contract)
-- `kubectl get jobs -n helm-demo` captured **during** the install (Job present)
-- `kubectl logs` from the hook Job showing your "running pre-install migration" echo
-- `kubectl get jobs -n helm-demo` captured **after** the policy triggers (Job gone)
-
----
-
-## Task 5 — Documentation (1 pt)
-
-`YOUR TASK`: create `k8s/lab10-app/HELM.md` covering, in this order:
-
-1. **Chart overview** — directory tree, what each template renders, the `values.yaml` contract
-2. **Configuration** — table of the top-level values and how `values-prod.yaml` differs from defaults
-3. **Helpers** — your four named templates and one sentence on why `selectorLabels` is a subset of `labels`
-4. **Hook** — the four annotations on your `db-migrate` Job and what each one does
-5. **Operations** — the exact `install`, `upgrade -f a -f b`, `history`, `rollback`, `uninstall` commands you ran
-6. **Evidence** — all the captures from Tasks 1.3 / 2.8 / 3.5 / 4.3
-7. **Challenges & learnings** — at least one real one (`indent`/`nindent` bug, immutable selector, `hook-weight` not quoted, etc.)
+- Блок аннотаций вашего `db-migrate.yaml` (контракт из четырёх ключей)
+- `kubectl get jobs -n helm-demo`, снятый **во время** установки (Job присутствует)
+- `kubectl logs` из Job хука, показывающий ваш echo "running pre-install migration"
+- `kubectl get jobs -n helm-demo`, снятый **после** срабатывания политики (Job исчез)
 
 ---
 
-## Bonus Task — Publish to GHCR via OCI (2 pts)
+## Задача 5 — Документация (1 балл)
 
-**Objective:** Package the chart, push it to GHCR as an OCI artifact, then **install it from the registry** to prove the round-trip.
+`ВАША ЗАДАЧА`: создайте `k8s/lab10-app/HELM.md`, охватывающий по порядку:
 
-`YOUR TASK`: less hand-holding here.
+1. **Обзор чарта** — дерево каталогов, что рендерит каждый шаблон, контракт `values.yaml`
+2. **Конфигурация** — таблица значений верхнего уровня и чем `values-prod.yaml` отличается от умолчаний
+3. **Хелперы** — ваши четыре именованных шаблона и одно предложение о том, почему `selectorLabels` — подмножество `labels`
+4. **Хук** — четыре аннотации на вашем Job `db-migrate` и что делает каждая
+5. **Операции** — точные команды `install`, `upgrade -f a -f b`, `history`, `rollback`, `uninstall`, которые вы выполняли
+6. **Доказательства** — все скриншоты из задач 1.3 / 2.8 / 3.5 / 4.3
+7. **Трудности и выводы** — хотя бы одна настоящая (баг `indent`/`nindent`, неизменяемый селектор, `hook-weight` без кавычек и т.п.)
 
-1. `helm package` your chart into `lab10-app-<version>.tgz`.
-2. Create a **classic** GitHub PAT (Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token) with the **`write:packages`** scope. Fine-grained tokens don't support OCI pushes yet (May 2026). In CI you'd use the auto-injected `GITHUB_TOKEN` instead; locally use the PAT. **Never paste the PAT in a committed file or on the CLI.**
-3. `echo $CR_PAT | helm registry login ghcr.io -u <your-username> --password-stdin` — the PAT comes via stdin so it doesn't land in shell history.
+---
+
+## Бонусная задача — Публикация в GHCR через OCI (2 балла)
+
+**Цель:** упакуйте чарт, запушьте его в GHCR как артефакт OCI, затем **установите его из реестра**, чтобы доказать round-trip.
+
+`ВАША ЗАДАЧА`: здесь меньше подсказок.
+
+1. `helm package` ваш чарт в `lab10-app-<version>.tgz`.
+2. Создайте **classic** PAT GitHub (Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token) с областью **`write:packages`**. Fine-grained token'ы пока не поддерживают OCI push (май 2026). В CI вы бы использовали автоинжектируемый `GITHUB_TOKEN`; локально используйте PAT. **Никогда не вставляйте PAT в закоммиченный файл или в CLI.**
+3. `echo $CR_PAT | helm registry login ghcr.io -u <your-username> --password-stdin` — PAT приходит через stdin, чтобы не попасть в историю оболочки.
 4. `helm push <tgz> oci://ghcr.io/<your-username>/charts`.
-5. Make the GHCR package **public** (Your profile → Packages → `charts/lab10-app` → Package settings → Change visibility → Public) so your grader can pull it without credentials.
-6. In a fresh namespace, `helm install … oci://ghcr.io/<your-username>/charts/lab10-app --version <ver>` — and prove the install came **from the registry**, not your local directory (the `STATUS` will show the OCI source).
+5. Сделайте пакет GHCR **публичным** (Your profile → Packages → `charts/lab10-app` → Package settings → Change visibility → Public), чтобы проверяющий мог вытянуть его без учётных данных.
+6. В свежем пространстве имён выполните `helm install … oci://ghcr.io/<your-username>/charts/lab10-app --version <ver>` — и докажите, что установка пришла **из реестра**, а не из вашего локального каталога (в `STATUS` будет виден OCI-источник).
 
-Commands you'll need (look them up — `helm package`, `helm registry login`, `helm push`, `helm install oci://...`).
+Команды, которые понадобятся (ищите их — `helm package`, `helm registry login`, `helm push`, `helm install oci://...`).
 
-Paste into `HELM.md`:
+Вставьте в `HELM.md`:
 
-- The `helm package` output
-- The `helm push` output **with the digest**
-- The GHCR package URL (e.g. `https://github.com/users/<you>/packages/container/package/charts%2Flab10-app`)
-- The `helm install oci://…` output and `helm list` showing the OCI-sourced release
+- Вывод `helm package`
+- Вывод `helm push` **с digest**
+- URL пакета GHCR (например, `https://github.com/users/<you>/packages/container/package/charts%2Flab10-app`)
+- Вывод `helm install oci://…` и `helm list`, показывающий релиз из OCI-источника
 
 ---
 
-## How to Submit
+## Как сдавать
 
-Same flow as Lab 9: branch `lab10`, add `k8s/lab10-app/`, commit, push, open **two** PRs.
+Тот же поток, что в лабораторной 9: ветка `lab10`, добавьте `k8s/lab10-app/`, закоммитьте, запушьте, откройте **два** PR.
 
 ```bash
 git switch -c lab10
@@ -522,12 +522,12 @@ git commit -m "feat(lab10): package web + echo as a helm 4 chart"
 git push -u origin lab10
 ```
 
-PRs:
+PR:
 
-- `your-fork:lab10` → `course-repo:master` *(reviewed)*
-- `your-fork:lab10` → `your-fork:master` *(merges into your own main when done)*
+- `your-fork:lab10` → `course-repo:master` *(на проверку)*
+- `your-fork:lab10` → `your-fork:master` *(сливается в ваш собственный main, когда готово)*
 
-PR checklist:
+Чек-лист PR:
 
 ```text
 - [ ] Task 1 done — helm v4.1.x, public chart inspected, concepts explained
@@ -540,69 +540,69 @@ PR checklist:
 
 ---
 
-## Acceptance Criteria
+## Критерии приёмки
 
-### Task 1 (1 pt)
-- ✅ `helm version` reports v4.1.x
-- ✅ A public OCI chart inspected via `helm show chart` / `helm show values`
-- ✅ Chart / Release / Values explained in your own words
+### Задача 1 (1 балл)
+- ✅ `helm version` показывает v4.1.x
+- ✅ Публичный OCI-чарт изучен через `helm show chart` / `helm show values`
+- ✅ Chart / Release / Values объяснены своими словами
 
-### Task 2 (3 pts)
-- ✅ `Chart.yaml` with the correct `apiVersion`, SemVer `version`, and `appVersion`
-- ✅ `values.yaml` with every Lab 9 hardcoded value exposed (replicas, image, ports, resources, probes, echo block)
-- ✅ `_helpers.tpl` defines and uses **four** named templates: `name`, `fullname`, `labels`, `selectorLabels`
-- ✅ `selectorLabels` is a strict subset of `labels` (no `version` in it)
-- ✅ All four manifest templates render via `include`, `nindent`, `default`, `with`
-- ✅ Liveness + readiness probes kept and value-configurable
-- ✅ `helm lint` is clean and `helm install` reaches REVISION 1
+### Задача 2 (3 балла)
+- ✅ `Chart.yaml` с корректными `apiVersion`, SemVer `version` и `appVersion`
+- ✅ `values.yaml` с каждым жёстко зашитым значением из лабораторной 9 (реплики, образ, порты, ресурсы, пробы, блок echo)
+- ✅ `_helpers.tpl` определяет и использует **четыре** именованных шаблона: `name`, `fullname`, `labels`, `selectorLabels`
+- ✅ `selectorLabels` — строгое подмножество `labels` (без `version`)
+- ✅ Все четыре шаблона манифестов рендерятся через `include`, `nindent`, `default`, `with`
+- ✅ Пробы liveness + readiness сохранены и настраиваемы через values
+- ✅ `helm lint` чист и `helm install` достигает REVISION 1
 
-### Task 3 (3 pts)
-- ✅ `values-prod.yaml` (and optionally dev/staging) contains **only deltas** from `values.yaml`
-- ✅ `helm upgrade ... -f values.yaml -f values-prod.yaml` produces REVISION 2
-- ✅ A real value (replica count) visibly changes between revisions
-- ✅ `helm rollback` returns the release to REVISION 1
+### Задача 3 (3 балла)
+- ✅ `values-prod.yaml` (и опционально dev/staging) содержит **только различия** от `values.yaml`
+- ✅ `helm upgrade ... -f values.yaml -f values-prod.yaml` даёт REVISION 2
+- ✅ Реальное значение (число реплик) видимо меняется между ревизиями
+- ✅ `helm rollback` возвращает релиз к REVISION 1
 
-### Task 4 (2 pts)
-- ✅ One Job hook with `helm.sh/hook: pre-install,pre-upgrade`
-- ✅ `helm.sh/hook-weight` set (quoted string)
-- ✅ `helm.sh/hook-delete-policy` set so the Job is cleaned up
-- ✅ Hook fires on both install and upgrade; logs captured
+### Задача 4 (2 балла)
+- ✅ Один хук Job с `helm.sh/hook: pre-install,pre-upgrade`
+- ✅ Задан `helm.sh/hook-weight` (строка в кавычках)
+- ✅ Задан `helm.sh/hook-delete-policy`, чтобы Job очищался
+- ✅ Хук срабатывает и на install, и на upgrade; логи зафиксированы
 
-### Task 5 (1 pt)
-- ✅ `HELM.md` covers all seven required sections with the captures pasted in
+### Задача 5 (1 балл)
+- ✅ `HELM.md` охватывает все семь обязательных разделов со вставленными скриншотами
 
-### Bonus (2 pts)
-- ✅ Chart packaged to `.tgz`
-- ✅ Pushed to `oci://ghcr.io/<username>/charts`
-- ✅ Installed *from the registry* (not from the local directory)
-- ✅ GHCR URL + install-from-OCI output in `HELM.md`
+### Бонус (2 балла)
+- ✅ Чарт упакован в `.tgz`
+- ✅ Запушен в `oci://ghcr.io/<username>/charts`
+- ✅ Установлен *из реестра* (не из локального каталога)
+- ✅ URL GHCR + вывод установки из OCI в `HELM.md`
 
 ---
 
-## Rubric
+## Рубрика
 
-| Task | Points | Criteria |
+| Задача | Баллы | Критерии |
 |------|-------:|----------|
-| **Task 1** — Fundamentals | **1** | v4.1.x, public chart inspected, concepts explained |
-| **Task 2** — Chart build | **3** | Clean templating, four helpers, lint clean, install reaches REVISION 1 |
-| **Task 3** — Multi-env | **3** | `-f a -f b` layering produces REVISION 2 with a visible value change; rollback works |
-| **Task 4** — Hooks | **2** | Pre-install/pre-upgrade hook with weight + delete policy; fires and cleans up |
-| **Task 5** — Documentation | **1** | Complete `HELM.md` with evidence |
-| **Bonus** — OCI push | **2** | Chart packaged, pushed to GHCR, installed *from the registry* |
-| **Total** | **12** | 10 main + 2 bonus |
+| **Задача 1** — Основы | **1** | v4.1.x, публичный чарт изучен, понятия объяснены |
+| **Задача 2** — Сборка чарта | **3** | Чистое шаблонизирование, четыре хелпера, lint чист, install достигает REVISION 1 |
+| **Задача 3** — Мульти-окружения | **3** | Наслоение `-f a -f b` даёт REVISION 2 с видимым изменением значения; откат работает |
+| **Задача 4** — Хуки | **2** | Хук pre-install/pre-upgrade с weight + delete policy; срабатывает и очищается |
+| **Задача 5** — Документация | **1** | Полный `HELM.md` с доказательствами |
+| **Бонус** — OCI push | **2** | Чарт упакован, запушен в GHCR, установлен *из реестра* |
+| **Итого** | **12** | 10 основных + 2 бонусных |
 
-**Grading:**
-- **10/10:** Clean templating from scratch, multi-env upgrade visible across revisions, hook fires + cleans up, thorough docs
-- **8–9/10:** Chart installs and upgrades, minor gaps in helpers or hook annotations
-- **6–7/10:** Basic chart installs but multi-env upgrade or hook polish missing
-- **<6/10:** `helm create` boilerplate submitted, hardcoded values, no hook, or chart doesn't lint
+**Оценивание:**
+- **10/10:** Чистое шаблонизирование с нуля, мульти-окруженческое обновление видно по ревизиям, хук срабатывает + очищается, основательная документация
+- **8–9/10:** Чарт устанавливается и обновляется, небольшие пробелы в хелперах или аннотациях хука
+- **6–7/10:** Базовый чарт устанавливается, но мульти-окруженческое обновление или доработка хука отсутствуют
+- **<6/10:** Сдан шаблон `helm create`, жёстко зашитые значения, нет хука, или чарт не проходит lint
 
 ---
 
-## Resources
+## Ресурсы
 
 <details>
-<summary>📚 Documentation</summary>
+<summary>📚 Документация</summary>
 
 - [Helm Documentation](https://helm.sh/docs/) — Helm 4
 - [Chart Template Guide](https://helm.sh/docs/chart_template_guide/)
@@ -615,7 +615,7 @@ PR checklist:
 </details>
 
 <details>
-<summary>🛠️ Tools & Registries</summary>
+<summary>🛠️ Инструменты и реестры</summary>
 
 - [Artifact Hub](https://artifacthub.io/) — public chart search (15,000+ charts)
 - [helm-docs](https://github.com/norwoodj/helm-docs) — auto-generate README from values
@@ -625,24 +625,24 @@ PR checklist:
 </details>
 
 <details>
-<summary>⚠️ Common Pitfalls (from real dry-runs)</summary>
+<summary>⚠️ Частые ловушки (из реальных прогонов)</summary>
 
-- **`helm create` overwrites your work.** Running it inside an existing chart directory clobbers your hand-written `Chart.yaml`, `values.yaml`, and helpers without asking. Don't run it. Write the files yourself — this lab grades that skill.
-- **Fullname helper missing the collapse branch.** A naive `printf "%s-%s" .Release.Name .Chart.Name` produces `lab10-app-lab10-app` when release name and chart name match (which they do — release is `lab10-app`). Then `-web` appends to give `lab10-app-lab10-app-web`. Lab 11 references `deploy/lab10-app-web`, so this breaks the next lab silently. The canonical `if contains $name .Release.Name` branch (cribbed from `helm create`) is what makes the collapse work. Test with `helm template lab10-app k8s/lab10-app | grep '^  name:'` BEFORE installing.
-- **Replacing the whole `helm create` `values.yaml` breaks `helm lint`.** The generated boilerplate ships a `templates/serviceaccount.yaml` that references `.Values.serviceAccount.create`. The moment you blow away that block in `values.yaml`, `helm lint` errors out because the referenced key vanished. Either edit the defaults in place **or** (recommended) skip `helm create` entirely. *(This is the exact self-inflicted snag from the lab's own reference run.)*
-- **`indent` vs `nindent`.** `nindent N` = newline + N spaces; `indent N` = N spaces only. When a `{{- ... -}}` action has already eaten the previous newline, `indent` produces invalid YAML that `helm lint` will catch and `helm install` will refuse. Use `nindent` unless you're sure.
-- **Mutable selector labels break rolling updates.** Once a `Deployment` exists, K8s rejects changes to `spec.selector.matchLabels`. If `version` is in your selector labels, every `appVersion` bump triggers a chart upgrade that K8s refuses — you'll have to `kubectl delete deploy ...` and lose zero-downtime. Keep `selectorLabels` to `name` + `instance` only.
-- **`hook-weight` must be a quoted string.** `"helm.sh/hook-weight": -5` (unquoted) silently parses as a number and Helm ignores it; you'll get non-deterministic hook ordering. Always quote: `"helm.sh/hook-weight": "-5"`.
-- **Hook resources outlive `helm uninstall`.** Hook Jobs are *not* part of the release. Without `hook-delete-policy`, failed Jobs pile up forever and `helm uninstall` won't remove them. Always set `before-hook-creation,hook-succeeded`.
-- **Forgetting `helm dependency update` after editing `Chart.yaml`.** If you add a `dependencies:` entry (not required in this lab, but easy to add for the bonus), the subchart isn't downloaded into `charts/` until you run `helm dependency update`. `helm install` then fails with a missing-dependency error that's confusingly worded.
-- **OCI auth gotcha.** `helm registry login ghcr.io` uses Docker config, not a separate Helm credential store. If a stale Docker login exists for `ghcr.io`, you may need `docker logout ghcr.io` first. Always pipe the PAT via `--password-stdin`; never put it on the command line (it lands in your shell history).
-- **`apiVersion: v2` vs `v1` in `Chart.yaml`.** `v2` is the chart-format version introduced by Helm 3 and still used by Helm 4 — **not** the Helm binary version. `v1` is Helm 2 only. Helm 4 against a `v1` chart fails immediately; Helm 3 against a `v2` chart works. Always write `apiVersion: v2`.
-- **Empty `image.tag` in `values.yaml`.** Setting `tag: ""` lets `{{ .Values.image.tag | default .Chart.AppVersion }}` fall back. Setting `tag: latest` defeats reproducibility (kills rollbacks and breaks ArgoCD diff in Lab 13). Leave it empty in defaults; pin a SemVer in `values-prod.yaml`.
+- **`helm create` затирает вашу работу.** Запуск его внутри существующего каталога чарта перезаписывает ваш написанный вручную `Chart.yaml`, `values.yaml` и хелперы без вопросов. Не запускайте его. Пишите файлы сами — эта лабораторная оценивает именно этот навык.
+- **В fullname-хелпере отсутствует ветка схлопывания.** Наивное `printf "%s-%s" .Release.Name .Chart.Name` даёт `lab10-app-lab10-app`, когда имя релиза и имя чарта совпадают (а они совпадают — релиз это `lab10-app`). Затем `-web` дописывается, давая `lab10-app-lab10-app-web`. Лабораторная 11 ссылается на `deploy/lab10-app-web`, так что это молча ломает следующую лабораторную. Каноническая ветка `if contains $name .Release.Name` (срисованная из `helm create`) — это то, что делает схлопывание рабочим. Проверьте через `helm template lab10-app k8s/lab10-app | grep '^  name:'` ДО установки.
+- **Замена всего `helm create` `values.yaml` ломает `helm lint`.** Сгенерированный шаблон поставляет `templates/serviceaccount.yaml`, который ссылается на `.Values.serviceAccount.create`. В момент, когда вы стираете этот блок в `values.yaml`, `helm lint` завершается ошибкой, потому что исчез ключ, на который ссылаются. Либо правьте значения по умолчанию на месте, **либо** (рекомендуется) вообще пропустите `helm create`. *(Это та самая самостоятельно созданная заминка из собственного эталонного прогона лабораторной.)*
+- **`indent` vs `nindent`.** `nindent N` = перевод строки + N пробелов; `indent N` = только N пробелов. Когда действие `{{- ... -}}` уже съело предыдущий перевод строки, `indent` даёт невалидный YAML, который поймает `helm lint`, а `helm install` откажется выполнять. Используйте `nindent`, если не уверены.
+- **Изменяемые labels селектора ломают раскатку.** Как только `Deployment` существует, K8s отклоняет изменения `spec.selector.matchLabels`. Если `version` в ваших labels селектора, каждый бамп `appVersion` запускает обновление чарта, которое K8s отклоняет — вам придётся `kubectl delete deploy ...` и потерять нулевой простой. Держите `selectorLabels` только с `name` + `instance`.
+- **`hook-weight` должен быть строкой в кавычках.** `"helm.sh/hook-weight": -5` (без кавычек) молча парсится как число, и Helm его игнорирует; вы получите недетерминированный порядок хуков. Всегда берите в кавычки: `"helm.sh/hook-weight": "-5"`.
+- **Ресурсы хуков переживают `helm uninstall`.** Job'ы хуков — *не* часть релиза. Без `hook-delete-policy` неудачные Job'ы копятся навсегда, и `helm uninstall` не удалит их. Всегда задавайте `before-hook-creation,hook-succeeded`.
+- **Забыли `helm dependency update` после правки `Chart.yaml`.** Если вы добавите запись `dependencies:` (не требуется в этой лабораторной, но легко добавить для бонуса), подчарт не загрузится в `charts/`, пока вы не запустите `helm dependency update`. Затем `helm install` падает с запутанно сформулированной ошибкой отсутствующей зависимости.
+- **Подвох с OCI-аутентификацией.** `helm registry login ghcr.io` использует конфиг Docker, а не отдельное хранилище учётных данных Helm. Если для `ghcr.io` существует устаревший docker login, возможно, понадобится сначала `docker logout ghcr.io`. Всегда передавайте PAT через `--password-stdin`; никогда не кладите его в командную строку (он попадёт в историю оболочки).
+- **`apiVersion: v2` vs `v1` в `Chart.yaml`.** `v2` — версия формата чарта, введённая Helm 3 и по-прежнему используемая Helm 4 — **не** версия бинарника Helm. `v1` — только для Helm 2. Helm 4 против чарта `v1` падает сразу; Helm 3 против чарта `v2` работает. Всегда пишите `apiVersion: v2`.
+- **Пустой `image.tag` в `values.yaml`.** Установка `tag: ""` позволяет `{{ .Values.image.tag | default .Chart.AppVersion }}` откатиться. Установка `tag: latest` убивает воспроизводимость (ломает откаты и ломает diff в ArgoCD в лабораторной 13). Оставляйте пустым в умолчаниях; закрепляйте SemVer в `values-prod.yaml`.
 
 </details>
 
 <details>
-<summary>📖 Learning Resources</summary>
+<summary>📖 Учебные ресурсы</summary>
 
 - [Quickstart Guide](https://helm.sh/docs/intro/quickstart/)
 - [Using Helm](https://helm.sh/docs/intro/using_helm/)
@@ -653,18 +653,18 @@ PR checklist:
 
 ---
 
-## Looking Ahead
+## Взгляд вперёд
 
-| Lab | What it adds to this chart |
+| Лабораторная | Что добавляет к этому чарту |
 |---:|---|
-| 11 | Secrets management with OpenBao — because `values.yaml` is git-tracked and your DB password isn't |
-| 12 | ConfigMaps + PVCs added as new templates in this same chart |
-| 13 | ArgoCD deploys this chart via GitOps; `helm template` becomes the rendering step |
-| 14 | Argo Rollouts replaces the Deployment template with a Rollout for canary delivery |
-| 16 | kube-prometheus-stack (a Helm chart itself) scrapes your app via a ServiceMonitor you add to this chart |
+| 11 | Управление секретами с OpenBao — потому что `values.yaml` отслеживается в git, а ваш пароль БД — нет |
+| 12 | ConfigMaps + PVC, добавленные как новые шаблоны в этот же чарт |
+| 13 | ArgoCD развёртывает этот чарт через GitOps; `helm template` становится шагом рендеринга |
+| 14 | Argo Rollouts заменяет шаблон Deployment на Rollout для canary-доставки |
+| 16 | kube-prometheus-stack (сам являющийся чартом Helm) собирает метрики вашего приложения через ServiceMonitor, который вы добавите в этот чарт |
 
 ---
 
-**Good luck!** ⛵
+**Удачи!** ⛵
 
-> **Remember:** Template everything, hardcode nothing (except sensible defaults in `values.yaml`). One chart, N value files. Never comment out a health check — make it a value instead. And **never** run `helm create` inside this lab.
+> **Помните:** шаблонизируйте всё, не зашивайте ничего жёстко (кроме разумных умолчаний в `values.yaml`). Один чарт, N файлов values. Никогда не закомментируйте проверку состояния — сделайте её значением. И **никогда** не запускайте `helm create` в этой лабораторной.

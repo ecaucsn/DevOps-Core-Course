@@ -1,65 +1,65 @@
-# Lab 13 — GitOps with ArgoCD
+# Лабораторная работа 13 — GitOps с ArgoCD
 
-![difficulty](https://img.shields.io/badge/difficulty-intermediate-yellow)
-![topic](https://img.shields.io/badge/topic-GitOps-blue)
-![points](https://img.shields.io/badge/points-10%2B2-orange)
-![tech](https://img.shields.io/badge/tech-ArgoCD%203.4-informational)
+![сложность](https://img.shields.io/badge/difficulty-intermediate-yellow)
+![тема](https://img.shields.io/badge/topic-GitOps-blue)
+![баллы](https://img.shields.io/badge/points-10%2B2-orange)
+![технологии](https://img.shields.io/badge/tech-ArgoCD%203.4-informational)
 
-> **Goal:** Make Git the single source of truth for your cluster. Install **ArgoCD 3.4**, declare `Application` manifests for **three** services across **two** environments by hand, then collapse all six into one **ApplicationSet** that the cluster reconciles continuously.
-> **Deliverable:** A PR from `lab13` with `k8s/argocd/` (apps + ApplicationSet + values) and `docs/LAB13.md`. No more `helm upgrade` from your laptop.
-
----
-
-## Overview
-
-Through Lab 12 you deployed by typing `helm upgrade` from a laptop (or a CI runner). That is the **push** model: a human or pipeline reaches *into* the cluster with cluster-admin credentials. **GitOps** inverts this — an agent *inside* the cluster watches Git, pulls the desired state, and reconciles it continuously. The cluster reaches out to Git; nothing reaches in.
-
-In this lab you will practice:
-
-- Picking and **pinning an ArgoCD chart version whose `appVersion` is in the 3.4.x line** (no tutorial copy-paste — read the chart index)
-- Writing an `Application` CRD from the bare shape — `source` / `destination` / `syncPolicy` in your own hand
-- Two sync disciplines: dev with `automated{prune,selfHeal}`, prod with manual sync — and writing down *why*
-- Generating **six** Applications from one **ApplicationSet** Matrix(List, List) template — the pattern that only earns its keep at ≥ 3 apps
-- Proving the GitOps loop: delete a workload, ArgoCD recreates it; `kubectl edit` a Service, ArgoCD reverts it within 3 minutes
-
-> ⚠️ **Scope:** no Argo Rollouts (that's Lab 14), no multi-cluster, no SSO/OIDC. Stick to one in-cluster ArgoCD managing one cluster. Pick a *different* bonus instead of installing more controllers.
-
-> ⚠️ **Version note:** ArgoCD **2.x is EOL** (the 3.2 release in November 2025 ended 2.x support). This lab uses **3.4**. If a tutorial you find online uses 2.x manifests, the `Application`/`ApplicationSet` CRDs are compatible, but cross-check against the 3.x docs linked at the end.
+> **Цель:** сделать Git единственным источником истины для вашего кластера. Установить **ArgoCD 3.4**, вручную объявить манифесты `Application` для **трёх** сервисов в **двух** средах, а затем свернуть все шесть в один **ApplicationSet**, который кластер непрерывно согласовывает.
+> **Результат сдачи:** PR из ветки `lab13` с `k8s/argocd/` (apps + ApplicationSet + values) и `docs/LAB13.md`. Больше никакого `helm upgrade` с ноутбука.
 
 ---
 
-## Project State
+## Обзор
 
-**You should have from previous labs:**
+До лабораторной 12 вы развёртывали, набирая `helm upgrade` с ноутбука (или CI-раннера). Это **push**-модель: человек или конвейер заходит *внутрь* кластера с учётными данными cluster-admin. **GitOps** переворачивает это: агент *внутри* кластера следит за Git, забирает желаемое состояние и непрерывно его согласовывает. Кластер обращается к Git; внутрь никто не заходит.
 
-- A k3d cluster on Kubernetes **1.36** (Lab 9)
-- A Helm chart for `app-python` under `k8s/lab10-app/` with `values-dev.yaml` / `values-prod.yaml` (Lab 10) — Lab 13 will deploy this chart through ArgoCD instead of `helm upgrade`
-- The **`echo`** plumbing service from Lab 9 (`ghcr.io/inno-devops-labs/echo:v1`, port 8081)
+В этой лабораторной вы будете практиковать:
 
-**This lab adds:**
+- Выбор и **фиксацию версии чарта ArgoCD, у которого `appVersion` находится в ветке 3.4.x** (никакого копипаста из туториалов — читайте индекс чарта)
+- Написание CRD `Application` с нуля по базовой форме — `source` / `destination` / `syncPolicy` своими руками
+- Две дисциплины синхронизации: dev с `automated{prune,selfHeal}`, prod с ручной синхронизацией — и письменное объяснение *почему*
+- Генерацию **шести** Application из одного шаблона **ApplicationSet** Matrix(List, List) — паттерн, который оправдывает себя только при ≥ 3 приложениях
+- Доказательство работы цикла GitOps: удалите workload, и ArgoCD воссоздаст его; сделайте `kubectl edit` для Service, и ArgoCD откатит изменение в течение 3 минут
 
-- ArgoCD 3.4 installed via the `argo/argo-cd` Helm chart (in `argocd` namespace)
-- The **`health`** plumbing service — the **third** service in your topology, shipped in `plumbing/health/` (`ghcr.io/inno-devops-labs/health:v1`, port 8082)
-- `k8s/argocd/apps/` — six hand-written `Application` manifests (Tasks 2–3), later replaced by one `ApplicationSet` (Task 4)
-- `docs/LAB13.md` — your submission report
+> ⚠️ **Область применения:** без Argo Rollouts (это лабораторная 14), без мультикластерности, без SSO/OIDC. Ограничьтесь одним ArgoCD внутри кластера, управляющим одним кластером. Выберите *другую* бонусную задачу вместо установки новых контроллеров.
 
-By Lab 14 the same six Applications get progressive-delivery `Rollout` CRDs in front of them, so the GitOps loop you build here is the substrate everything else runs on.
+> ⚠️ **Примечание о версиях:** ArgoCD **2.x больше не поддерживается (EOL)** (релиз 3.2 в ноябре 2025 года прекратил поддержку 2.x). В этой лабораторной используется **3.4**. Если найденный онлайн-туториал использует манифесты 2.x, CRD `Application`/`ApplicationSet` совместимы, но сверяйтесь с документацией 3.x, ссылки на которую приведены в конце.
 
 ---
 
-## The Three Services
+## Состояние проекта
 
-| Service | Origin | Image | Port | You build it? |
+**У вас должно быть из предыдущих лабораторных:**
+
+- Кластер k3d на Kubernetes **1.36** (лабораторная 9)
+- Helm-чарт для `app-python` в `k8s/lab10-app/` с `values-dev.yaml` / `values-prod.yaml` (лабораторная 10) — лабораторная 13 развернёт этот чарт через ArgoCD вместо `helm upgrade`
+- Служебный сервис **`echo`** из лабораторной 9 (`ghcr.io/inno-devops-labs/echo:v1`, порт 8081)
+
+**Эта лабораторная добавляет:**
+
+- ArgoCD 3.4, установленный через Helm-чарт `argo/argo-cd` (в пространстве имён `argocd`)
+- Служебный сервис **`health`** — **третий** сервис в вашей топологии, поставляемый в `plumbing/health/` (`ghcr.io/inno-devops-labs/health:v1`, порт 8082)
+- `k8s/argocd/apps/` — шесть написанных вручную манифестов `Application` (задачи 2–3), позже заменяемых одним `ApplicationSet` (задача 4)
+- `docs/LAB13.md` — ваш отчёт о сдаче
+
+К лабораторной 14 перед теми же шестью Application появятся CRD `Rollout` для прогрессивной доставки, так что цикл GitOps, который вы строите здесь, станет основой, на которой работает всё остальное.
+
+---
+
+## Три сервиса
+
+| Сервис | Источник | Образ | Порт | Вы его собираете? |
 |---|---|---|---|---|
-| 🐍 **app-python** | Your Lab 1 → Lab 12 service | from your CI | 8080 | ✅ Yes — your code |
-| 🦫 **echo** | Course plumbing (Lab 9+) | `ghcr.io/inno-devops-labs/echo:v1` | 8081 | ❌ No — pre-built |
-| 💚 **health** | Course plumbing — **new this lab** | `ghcr.io/inno-devops-labs/health:v1` | 8082 | ❌ No — pre-built |
+| 🐍 **app-python** | Ваш сервис из лабораторных 1 → 12 | из вашего CI | 8080 | ✅ Да — ваш код |
+| 🦫 **echo** | Служебный сервис курса (лабораторная 9+) | `ghcr.io/inno-devops-labs/echo:v1` | 8081 | ❌ Нет — предсобран |
+| 💚 **health** | Служебный сервис курса — **новый в этой лабораторной** | `ghcr.io/inno-devops-labs/health:v1` | 8082 | ❌ Нет — предсобран |
 
-`health` is shipped in `plumbing/health/` (see `plumbing/health/README.md`). Reference the published image directly — **do not** `docker build` it. It exposes `GET /`, `GET /healthz`, and `GET /metrics`. Its only purpose in this lab is to be a third deployment target so `ApplicationSet` stops being a toy pattern.
+`health` поставляется в `plumbing/health/` (см. `plumbing/health/README.md`). Ссылайтесь на опубликованный образ напрямую — **не** собирайте его через `docker build`. Он предоставляет `GET /`, `GET /healthz` и `GET /metrics`. Его единственная цель в этой лабораторной — быть третьей целью развёртывания, чтобы `ApplicationSet` перестал быть игрушечным паттерном.
 
 ```mermaid
 flowchart TD
-  Git[📝 GitHub repo<br/>charts + apps/]
+  Git[📝 Репозиторий GitHub<br/>charts + apps/]
   Git --> Root[🌱 ApplicationSet]
   Root --> AP_D[🐍 app-python-dev]
   Root --> AG_D[🦫 echo-dev]
@@ -67,67 +67,67 @@ flowchart TD
   Root --> AP_P[🐍 app-python-prod]
   Root --> AG_P[🦫 echo-prod]
   Root --> AH_P[💚 health-prod]
-  AP_D & AG_D & AH_D --> NSdev[☸️ namespace: dev<br/>auto-sync + selfHeal + prune]
-  AP_P & AG_P & AH_P --> NSprod[☸️ namespace: prod<br/>manual sync]
+  AP_D & AG_D & AH_D --> NSdev[☸️ пространство имён: dev<br/>auto-sync + selfHeal + prune]
+  AP_P & AG_P & AH_P --> NSprod[☸️ пространство имён: prod<br/>ручная синхронизация]
 ```
 
 ---
 
-## Setup
+## Подготовка
 
-Confirm prereqs from prior labs are alive: `kubectl get nodes` (3 Ready nodes on v1.36.x from Lab 9) and `helm version` (4.1.x from Lab 10). Then add the Argo chart repo — `helm repo add argo https://argoproj.github.io/argo-helm && helm repo update`. You'll search it in Task 1.
+Убедитесь, что предпосылки из предыдущих лабораторных живы: `kubectl get nodes` (3 узла в состоянии Ready на v1.36.x из лабораторной 9) и `helm version` (4.1.x из лабораторной 10). Затем добавьте репозиторий чартов Argo — `helm repo add argo https://argoproj.github.io/argo-helm && helm repo update`. Вы будете искать в нём в задаче 1.
 
-Directory layout you will produce — `k8s/argocd/install/argocd-values.yaml` (Task 1), six Application manifests under `k8s/argocd/apps/` (Tasks 2 & 3 — `{app-python,echo,health}-{dev,prod}.yaml`), and `k8s/argocd/applicationset.yaml` (Task 4, which deletes the six). Your write-up goes in `docs/LAB13.md`. Plumbing files (`plumbing/health/Dockerfile`, `main.go`, …) you do **not** edit — they are given, complete.
+Структура каталогов, которую вы создадите: `k8s/argocd/install/argocd-values.yaml` (задача 1), шесть манифестов Application в `k8s/argocd/apps/` (задачи 2 и 3 — `{app-python,echo,health}-{dev,prod}.yaml`) и `k8s/argocd/applicationset.yaml` (задача 4, которая удаляет эти шесть). Ваш отчёт идёт в `docs/LAB13.md`. Служебные файлы (`plumbing/health/Dockerfile`, `main.go`, …) вы **не** редактируете — они даны готовыми.
 
 ---
 
-## Task 1 — Install ArgoCD 3.4 (2 pts)
+## Задача 1 — Установка ArgoCD 3.4 (2 балла)
 
-### 1.1 — Find a chart version with `appVersion` in 3.4.x
+### 1.1 — Найдите версию чарта с `appVersion` в 3.4.x
 
-`YOUR TASK`: the `argo/argo-cd` Helm chart and the ArgoCD application itself version independently. Pick a **chart** version whose **`appVersion`** falls inside **3.4.x** (2.x is EOL — you will lose this point if your server reports 2.x or a 3.3.x preview).
+`ВАША ЗАДАЧА`: Helm-чарт `argo/argo-cd` и само приложение ArgoCD версионируются независимо. Выберите версию **чарта**, у которой **`appVersion`** попадает в **3.4.x** (2.x больше не поддерживается — вы потеряете этот балл, если ваш сервер сообщает 2.x или превью 3.3.x).
 
-Hint: `helm search repo argo/argo-cd --versions` lists `CHART VERSION` and `APP VERSION` side by side. Read the table; pick the most recent stable row with `APP VERSION` starting `3.4.`.
+Подсказка: `helm search repo argo/argo-cd --versions` выводит `CHART VERSION` и `APP VERSION` рядом. Прочитайте таблицу; выберите самую свежую стабильную строку, где `APP VERSION` начинается с `3.4.`.
 
-In `docs/LAB13.md`, write the **two** version numbers you chose and a sentence explaining how chart-version and appVersion differ.
+В `docs/LAB13.md` запишите **два** выбранных номера версий и предложение, объясняющее, чем версия чарта отличается от appVersion.
 
-### 1.2 — Install via Helm, with a pinned values file
+### 1.2 — Установка через Helm с зафиксированным файлом values
 
-`YOUR TASK`: create **`k8s/argocd/install/argocd-values.yaml`** with the *minimum* overrides for a k3d-friendly install. Don't blindly upstream-default. At a minimum, decide and configure:
+`ВАША ЗАДАЧА`: создайте **`k8s/argocd/install/argocd-values.yaml`** с *минимальными* переопределениями для установки, дружественной к k3d. Не берите слепо значения по умолчанию из апстрима. Как минимум решите и настройте:
 
-- whether `server.service.type` should be `ClusterIP` (you'll `kubectl port-forward`) or `LoadBalancer` (k3d's klipper publishes it) — pick one and justify in the report
-- `configs.params."server.insecure"` — true is fine for the lab (you'll terminate TLS at port-forward); document the tradeoff
-- a `resources:` block for at least `controller` and `repoServer` that fits inside k3d's two-agent budget
+- каким должен быть `server.service.type` — `ClusterIP` (вы будете делать `kubectl port-forward`) или `LoadBalancer` (klipper в k3d публикует его) — выберите один и обоснуйте в отчёте
+- `configs.params."server.insecure"` — true подходит для лабораторной (TLS будет завершаться на port-forward); опишите компромисс
+- блок `resources:` как минимум для `controller` и `repoServer`, укладывающийся в бюджет двух агентов k3d
 
-Then install — fill in the chart version you picked:
+Затем установите — подставьте выбранную вами версию чарта:
 
 ```bash
-# YOUR TASK below:
-#   --version: the chart version you picked in 1.1
-#   --values:  path to your overrides file (e.g. k8s/argocd/install/argocd-values.yaml)
+# ВАША ЗАДАЧА ниже:
+#   --version: версия чарта, которую вы выбрали в 1.1
+#   --values:  путь к вашему файлу переопределений (например, k8s/argocd/install/argocd-values.yaml)
 kubectl create namespace argocd
 helm install argocd argo/argo-cd \
   --namespace argocd \
   --version YOUR-TASK \
   --values YOUR-TASK
-# wait for the server with `kubectl rollout status deploy/argocd-server -n argocd --timeout=180s`
+# дождитесь сервера командой `kubectl rollout status deploy/argocd-server -n argocd --timeout=180s`
 ```
 
-`k8s/argocd/install/argocd-values.yaml` skeleton — write the inside yourself:
+Скелет `k8s/argocd/install/argocd-values.yaml` — содержимое напишите сами:
 
 ```yaml
 # k8s/argocd/install/argocd-values.yaml
-# Overrides for the argo/argo-cd chart on a k3d cluster.
-# Leave defaults for anything you don't have a reason to change.
+# Переопределения для чарта argo/argo-cd в кластере k3d.
+# Оставляйте значения по умолчанию для всего, что не нужно менять.
 
 server:
   service:
-    type: YOUR-TASK            # ClusterIP or LoadBalancer — your call, document why
-  # YOUR-TASK: any other server overrides (e.g. resource requests/limits)
+    type: YOUR-TASK            # ClusterIP или LoadBalancer — на ваш выбор, обоснуйте
+  # YOUR-TASK: любые другие переопределения server (например, requests/limits ресурсов)
 
 configs:
   params:
-    server.insecure: "YOUR-TASK"   # "true" if you want plain HTTP over port-forward
+    server.insecure: "YOUR-TASK"   # "true", если хотите обычный HTTP через port-forward
 
 controller:
   resources:
@@ -145,175 +145,175 @@ repoServer:
       memory: YOUR-TASK
 ```
 
-### 1.3 — Access UI + install matching CLI
+### 1.3 — Доступ к UI и установка подходящего CLI
 
-`YOUR TASK`: port-forward `svc/argocd-server` to your laptop, retrieve the initial admin password from the `argocd-initial-admin-secret` Secret in the `argocd` namespace (it's base64-encoded in `.data.password`), install the matching **3.4.x** CLI binary, and log in. The CLI's `argocd version` must report **both** `argocd: v3.4.x` (client) **and** `argocd-server: v3.4.x` (server).
+`ВАША ЗАДАЧА`: сделайте port-forward `svc/argocd-server` на ноутбук, получите начальный пароль администратора из Secret `argocd-initial-admin-secret` в пространстве имён `argocd` (он закодирован в base64 в `.data.password`), установите подходящий бинарник CLI **3.4.x** и войдите. Команда `argocd version` должна показывать **и** `argocd: v3.4.x` (клиент), **и** `argocd-server: v3.4.x` (сервер).
 
-Hint: the password lives in a Secret — `kubectl get secret -n argocd` lists what's there. Don't copy the base64; decode it.
+Подсказка: пароль лежит в Secret — `kubectl get secret -n argocd` покажет, что там есть. Не копируйте base64; декодируйте его.
 
-### 1.4 — Proof of work
+### 1.4 — Подтверждение работы
 
-**Paste into `docs/LAB13.md`:**
+**Вставьте в `docs/LAB13.md`:**
 
-- `helm search repo argo/argo-cd --versions | head -5` — your chosen row highlighted
-- `kubectl get pods -n argocd -o wide` — all core pods Running (expect ≥ 6: `argocd-server`, `argocd-application-controller`, `argocd-applicationset-controller`, `argocd-repo-server`, `argocd-redis`, `argocd-notifications-controller`; `dex-server` only if you enabled it)
-- `argocd version` — client + server both **3.4.x**
-- The full contents of `k8s/argocd/install/argocd-values.yaml`
-- One sentence on your `server.service.type` choice + one sentence on `server.insecure`
+- `helm search repo argo/argo-cd --versions | head -5` — выбранная вами строка выделена
+- `kubectl get pods -n argocd -o wide` — все основные pod'ы в состоянии Running (ожидается ≥ 6: `argocd-server`, `argocd-application-controller`, `argocd-applicationset-controller`, `argocd-repo-server`, `argocd-redis`, `argocd-notifications-controller`; `dex-server` только если вы его включили)
+- `argocd version` — клиент и сервер оба **3.4.x**
+- Полное содержимое `k8s/argocd/install/argocd-values.yaml`
+- Одно предложение о вашем выборе `server.service.type` + одно предложение о `server.insecure`
 
 ---
 
-## Task 2 — Application CRDs for Three Services (3 pts)
+## Задача 2 — CRD Application для трёх сервисов (3 балла)
 
-### 2.1 — Lay out the GitOps repo path
+### 2.1 — Разложите структуру GitOps-репозитория
 
-`YOUR TASK`: under `k8s/argocd/apps/`, you will produce **six** `Application` manifests in Tasks 2 and 3 (3 services × 2 envs). For now, start with the three **dev** Applications. In `docs/LAB13.md`, include a one-paragraph note explaining: which **chart** each Application references (Lab 10 chart for `app-python`; small charts you write for `echo` and `health` that just deploy the pre-built images + a Service).
+`ВАША ЗАДАЧА`: в `k8s/argocd/apps/` вы создадите **шесть** манифестов `Application` в задачах 2 и 3 (3 сервиса × 2 среды). Пока начните с трёх Application для **dev**. В `docs/LAB13.md` включите абзац с пояснением: на какой **чарт** ссылается каждая Application (чарт из лабораторной 10 для `app-python`; небольшие чарты, которые вы пишете для `echo` и `health`, просто развёртывающие предсобранные образы + Service).
 
-> Tip: the simplest `echo`/`health` chart is a `Chart.yaml` + `templates/deployment.yaml` + `templates/service.yaml` — three files each. The image must be `ghcr.io/inno-devops-labs/echo:v1` and `ghcr.io/inno-devops-labs/health:v1`. Do **not** rebuild them.
+> Подсказка: простейший чарт `echo`/`health` — это `Chart.yaml` + `templates/deployment.yaml` + `templates/service.yaml`, по три файла на каждый. Образ должен быть `ghcr.io/inno-devops-labs/echo:v1` и `ghcr.io/inno-devops-labs/health:v1`. **Не** пересобирайте их.
 
-### 2.2 — Write three `Application` CRDs by hand (dev environment)
+### 2.2 — Напишите три CRD `Application` вручную (среда dev)
 
-`YOUR TASK`: write `app-python-dev.yaml`, `echo-dev.yaml`, `health-dev.yaml` in `k8s/argocd/apps/`. The shape is shown; **every** value is yours to choose. For now start with **manual sync** (no `automated:` block) — you will turn it on in Task 3.
+`ВАША ЗАДАЧА`: напишите `app-python-dev.yaml`, `echo-dev.yaml`, `health-dev.yaml` в `k8s/argocd/apps/`. Форма показана; **каждое** значение выбираете вы. Пока начните с **ручной синхронизации** (без блока `automated:`) — включите её в задаче 3.
 
 ```yaml
-# k8s/argocd/apps/app-python-dev.yaml   (echo-dev.yaml and health-dev.yaml are analogous)
+# k8s/argocd/apps/app-python-dev.yaml   (echo-dev.yaml и health-dev.yaml аналогичны)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: YOUR-TASK                # e.g. app-python-dev — the controller indexes by this
-  namespace: argocd              # ArgoCD watches Applications in its OWN namespace
+  name: YOUR-TASK                # например, app-python-dev — по этому имени индексирует контроллер
+  namespace: argocd              # ArgoCD следит за Application в СВОЁМ пространстве имён
   finalizers:
-    - YOUR-TASK                  # the resources-finalizer that cascade-deletes K8s
-                                 # resources on `kubectl delete app`. Look it up.
+    - YOUR-TASK                  # resources-finalizer, который каскадно удаляет ресурсы K8s
+                                 # при `kubectl delete app`. Найдите его сами.
 spec:
   project: default
   source:
     repoURL: YOUR-TASK           # https://github.com/<you>/<your-fork>.git
-    targetRevision: YOUR-TASK    # branch (dev) or tag/SHA (prod) — pick one, explain in report
-    path: YOUR-TASK              # e.g. k8s/lab10-app for app-python; k8s/charts/echo for echo
-    helm:                        # if your chart takes values, declare them here
+    targetRevision: YOUR-TASK    # ветка (dev) или тег/SHA (prod) — выберите одно, объясните в отчёте
+    path: YOUR-TASK              # например, k8s/lab10-app для app-python; k8s/charts/echo для echo
+    helm:                        # если ваш чарт принимает values, объявите их здесь
       valueFiles:
-        - YOUR-TASK               # e.g. values-dev.yaml
+        - YOUR-TASK               # например, values-dev.yaml
   destination:
-    server: https://kubernetes.default.svc       # in-cluster API server
-    namespace: YOUR-TASK         # the K8s namespace the WORKLOAD lands in (e.g. dev)
+    server: https://kubernetes.default.svc       # API-сервер внутри кластера
+    namespace: YOUR-TASK         # пространство имён K8s, куда попадает WORKLOAD (например, dev)
   syncPolicy:
-    # NO `automated:` block YET — Task 3 turns it on for dev only.
+    # Блока `automated:` ПОКА НЕТ — задача 3 включает его только для dev.
     syncOptions:
-      - YOUR-TASK                # the option that auto-creates the destination namespace
+      - YOUR-TASK                # опция, автоматически создающая целевое пространство имён
 ```
 
-Things to figure out as you write these:
+Что нужно выяснить, пока вы их пишете:
 
-- `metadata.name` lives in `argocd` namespace but `spec.destination.namespace` is where the **workload** goes — these are two different namespaces. Do not conflate them.
-- `repoURL` must be the **GitOps repo** (your fork), reachable from the cluster. For HTTPS public repos no credential is needed; for private repos you'd register an `argocd-repo-creds` Secret (out of scope, but worth a sentence in the report).
-- The `finalizers:` block is **load-bearing**. Without it, `kubectl delete app` leaves the Deployment/Service running in the workload namespace. Try it both ways if you want to see the difference.
+- `metadata.name` живёт в пространстве имён `argocd`, а `spec.destination.namespace` — это то, куда идёт **workload**; это два разных пространства имён. Не путайте их.
+- `repoURL` должен указывать на **GitOps-репозиторий** (ваш форк), доступный из кластера. Для публичных HTTPS-репозиториев учётные данные не нужны; для приватных вы бы зарегистрировали Secret `argocd-repo-creds` (вне рамок, но стоит упомянуть одним предложением в отчёте).
+- Блок `finalizers:` **несущий**. Без него `kubectl delete app` оставляет Deployment/Service работающими в пространстве имён рабочей нагрузки. Попробуйте оба варианта, если хотите увидеть разницу.
 
-### 2.3 — Deploy and trigger the first sync manually
+### 2.3 — Разверните и запустите первую синхронизацию вручную
 
-Apply the three Application CRs (`kubectl apply -f k8s/argocd/apps/`) and confirm they appear in `argocd app list` as **OutOfSync** (no `automated:` block yet means the CRs exist but nothing has been reconciled). Then trigger each one with `argocd app sync <name>` — this is the manual sync click-equivalent. Confirm each reaches **`Synced / Healthy`** with `kubectl get app -n argocd -o wide`.
+Примените три CR Application (`kubectl apply -f k8s/argocd/apps/`) и убедитесь, что они появляются в `argocd app list` со статусом **OutOfSync** (пока нет блока `automated:`, CR существуют, но ничего не согласовано). Затем запустите каждый командой `argocd app sync <name>` — это эквивалент ручного нажатия синхронизации. Убедитесь, что каждый достигает **`Synced / Healthy`**, с помощью `kubectl get app -n argocd -o wide`.
 
-### 2.4 — Prove the GitOps loop
+### 2.4 — Докажите работу цикла GitOps
 
-`YOUR TASK`: change something cheap in Git (e.g. `replicaCount: 1` → `2` in your `app-python` chart's `values.yaml`), commit, push. Then **without running any `kubectl apply` or `helm upgrade`**, watch ArgoCD:
+`ВАША ЗАДАЧА`: измените что-нибудь недорогое в Git (например, `replicaCount: 1` → `2` в `values.yaml` вашего чарта `app-python`), закоммитьте, запушьте. Затем, **не выполняя никаких `kubectl apply` или `helm upgrade`**, наблюдайте за ArgoCD:
 
-1. Mark the Application **OutOfSync** within ~3 min (default reconcile interval), or sooner if you click **REFRESH** in the UI
-2. Apply the change (manual sync) and return to **Synced / Healthy**
+1. Application помечается **OutOfSync** в течение ~3 минут (интервал согласования по умолчанию) или раньше, если нажать **REFRESH** в UI
+2. Примените изменение (ручная синхронизация) и вернитесь к **Synced / Healthy**
 
-This is the headline of GitOps — Git changed, the cluster followed. No human reached into the cluster.
+Это главный смысл GitOps: Git изменился, кластер последовал. Ни один человек не заходил в кластер.
 
-### 2.5 — Proof of work
+### 2.5 — Подтверждение работы
 
-**Paste into `docs/LAB13.md`:**
+**Вставьте в `docs/LAB13.md`:**
 
-- The contents of the three Application manifests
-- `kubectl get app -n argocd -o wide` — three rows, **Synced / Healthy**
-- `kubectl get deploy,svc -n dev` — six resources (one Deployment + one Service per service) that you **never** `kubectl apply`'d by hand
-- The git commit SHA of your "GitOps loop" change + a screenshot or `argocd app history app-python-dev` showing the sync after that commit
+- Содержимое трёх манифестов Application
+- `kubectl get app -n argocd -o wide` — три строки, **Synced / Healthy**
+- `kubectl get deploy,svc -n dev` — шесть ресурсов (по одному Deployment + одному Service на сервис), которые вы **никогда** не применяли вручную через `kubectl apply`
+- SHA git-коммита вашего изменения для «цикла GitOps» + скриншот или `argocd app history app-python-dev`, показывающий синхронизацию после этого коммита
 
 ---
 
-## Task 3 — Multi-Environment: dev (auto) vs prod (manual) (3 pts)
+## Задача 3 — Мультисредовость: dev (авто) vs prod (вручную) (3 балла)
 
-### 3.1 — Two namespaces, two value sets
+### 3.1 — Два пространства имён, два набора values
 
-`YOUR TASK`: provide `values-dev.yaml` and `values-prod.yaml` for **each** chart (your `app-python` chart already has them from Lab 10; you need to add equivalents for the `echo` and `health` mini-charts you wrote in Task 2). They must differ **meaningfully** — at minimum two of: replica count, resource requests/limits, image tag pin, service type. Document the table in `docs/LAB13.md`.
+`ВАША ЗАДАЧА`: предоставьте `values-dev.yaml` и `values-prod.yaml` для **каждого** чарта (у вашего чарта `app-python` они уже есть из лабораторной 10; нужно добавить аналогичные для мини-чартов `echo` и `health`, написанных в задаче 2). Они должны различаться **осмысленно** — как минимум по двум из: число реплик, requests/limits ресурсов, фиксация тега образа, тип сервиса. Опишите таблицу в `docs/LAB13.md`.
 
-### 3.2 — Convert dev to auto-sync, add three prod Applications
+### 3.2 — Переведите dev на авто-синхронизацию, добавьте три Application для prod
 
-`YOUR TASK`: edit your three dev Applications to add an `automated:` block, and **write three new** prod Applications (`app-python-prod.yaml`, `echo-prod.yaml`, `health-prod.yaml`) that target the `prod` namespace **without** an `automated:` block.
+`ВАША ЗАДАЧА`: отредактируйте три dev-Application, добавив блок `automated:`, и **напишите три новые** prod-Application (`app-python-prod.yaml`, `echo-prod.yaml`, `health-prod.yaml`), нацеленные на пространство имён `prod` **без** блока `automated:`.
 
-**Dev sync policy — `YOUR-TASK` to fill:**
+**Политика синхронизации dev — заполните `YOUR-TASK`:**
 
 ```yaml
 syncPolicy:
   automated:
-    prune: YOUR-TASK              # delete cluster resources removed from Git?
-    selfHeal: YOUR-TASK           # revert manual cluster edits back to Git state?
-    allowEmpty: YOUR-TASK         # apply when render produces zero manifests? (read the docs)
+    prune: YOUR-TASK              # удалять ресурсы кластера, удалённые из Git?
+    selfHeal: YOUR-TASK           # возвращать ручные изменения кластера к состоянию Git?
+    allowEmpty: YOUR-TASK         # применять, когда рендер даёт ноль манифестов? (читайте документацию)
   syncOptions:
     - CreateNamespace=true
-    - YOUR-TASK                    # the option that uses K8s server-side apply
-                                   # — required for clean HPA/VPA coexistence
+    - YOUR-TASK                    # опция, использующая server-side apply в K8s
+                                   # — требуется для чистого сосуществования HPA/VPA
 ```
 
-**Prod sync policy — `YOUR-TASK` to fill:**
+**Политика синхронизации prod — заполните `YOUR-TASK`:**
 
 ```yaml
 spec:
   source:
     repoURL: YOUR-TASK
-    targetRevision: YOUR-TASK     # a TAG or release/* branch — NOT `main`. Why? See 3.3.
+    targetRevision: YOUR-TASK     # ТЕГ или ветка release/* — НЕ `main`. Почему? См. 3.3.
     path: YOUR-TASK
     helm:
       valueFiles:
-        - YOUR-TASK                # e.g. values-prod.yaml
+        - YOUR-TASK                # например, values-prod.yaml
   destination:
     namespace: YOUR-TASK           # prod
   syncPolicy:
-    # NO `automated:` block — prod is manual. A human clicks SYNC or runs `argocd app sync`.
+    # БЕЗ блока `automated:` — prod ручной. Человек нажимает SYNC или запускает `argocd app sync`.
     syncOptions:
       - YOUR-TASK
 ```
 
-### 3.3 — Explain the operational tradeoff
+### 3.3 — Объясните операционный компромисс
 
-In `docs/LAB13.md`, write 4–6 sentences answering:
+В `docs/LAB13.md` напишите 4–6 предложений, отвечающих на вопросы:
 
-- Why is `prune: true` + `selfHeal: true` reasonable for **dev** but dangerous for **prod**?
-- Why does `targetRevision: main` on a prod Application defeat the point of a release process?
-- What is the failure mode if you turn `prune: true` on with a wrong `path:` — and what's your mitigation?
+- Почему `prune: true` + `selfHeal: true` разумно для **dev**, но опасно для **prod**?
+- Почему `targetRevision: main` в prod-Application обесценивает смысл процесса релизов?
+- Каков режим отказа, если включить `prune: true` с неверным `path:`, и как вы это смягчите?
 
-This is the actual learning — the YAML is mechanical; the *policy choice* is the skill.
+В этом и состоит настоящее обучение: YAML механический, а *выбор политики* — это навык.
 
-### 3.4 — Verify both environments and trigger prod manually
+### 3.4 — Проверьте обе среды и запустите prod вручную
 
-Apply the six Applications. Dev should auto-sync within ~3 min (or immediately if you click REFRESH); prod stays **OutOfSync** until you run `argocd app sync app-python-prod` / `echo-prod` / `health-prod` by hand. Confirm with `kubectl get app -n argocd -o wide`, then compare `kubectl get pods -n dev` vs `kubectl get pods -n prod` — replica counts (and any other deltas you put in your values files) should differ.
+Примените шесть Application. Dev должен авто-синхронизироваться в течение ~3 минут (или сразу, если нажать REFRESH); prod остаётся в **OutOfSync**, пока вы вручную не выполните `argocd app sync app-python-prod` / `echo-prod` / `health-prod`. Подтвердите с помощью `kubectl get app -n argocd -o wide`, затем сравните `kubectl get pods -n dev` и `kubectl get pods -n prod` — число реплик (и любые другие отличия, которые вы задали в файлах values) должно различаться.
 
-### 3.5 — Proof of work
+### 3.5 — Подтверждение работы
 
-**Paste into `docs/LAB13.md`:**
+**Вставьте в `docs/LAB13.md`:**
 
-- The dev-vs-prod values table (replicas, resources, image tag pin, anything else)
-- All six Application manifests
-- `kubectl get app -n argocd -o wide` — six rows, every one **Synced / Healthy**
-- The 4–6 sentence operational-tradeoff write-up
+- Таблица values dev-vs-prod (реплики, ресурсы, фиксация тега образа, что угодно ещё)
+- Все шесть манифестов Application
+- `kubectl get app -n argocd -o wide` — шесть строк, каждая **Synced / Healthy**
+- Описание операционного компромисса на 4–6 предложений
 
 ---
 
-## Task 4 — ApplicationSet (the headline of the 3rd-service intro) (2 pts)
+## Задача 4 — ApplicationSet (главная тема введения третьего сервиса) (2 балла)
 
-### 4.1 — Why one template for six apps
+### 4.1 — Почему один шаблон для шести приложений
 
-With **three** services × **two** environments, the six hand-written Applications you just wrote share ~95% of their YAML — only `name`, `path`, and `namespace` vary. Adding a fourth service today means writing two new files and remembering to keep them in lock-step with the existing six. That's the pain `ApplicationSet` solves: one template + a **generator** that enumerates the combinations.
+При **трёх** сервисах × **двух** средах шесть написанных вручную Application, которые вы только что создали, делят ~95% своего YAML — различаются только `name`, `path` и `namespace`. Добавить сегодня четвёртый сервис означает написать два новых файла и не забыть синхронизировать их с существующими шестью. Именно эту боль решает `ApplicationSet`: один шаблон + **генератор**, перечисляющий комбинации.
 
-A single List generator over six elements would work but loses the structure (services and envs are conceptually independent). The right shape is a **Matrix(List services, List envs)** — cross-join of two small lists. Add a fourth service? One line in the services list. Add a third env (staging)? One line in the envs list.
+Один генератор List на шесть элементов сработал бы, но теряет структуру (сервисы и среды концептуально независимы). Правильная форма — **Matrix(List services, List envs)** — перекрёстное соединение двух небольших списков. Добавить четвёртый сервис? Одна строка в списке сервисов. Добавить третью среду (staging)? Одна строка в списке сред.
 
-> 💡 This is **the** pedagogical reason the lab introduces a third service. With one or two services, ApplicationSet is `kubectl apply` with extra steps. With six generated Applications, the value is obvious. Less than 3 = toy; 3 = real.
+> 💡 Именно в этом педагогическая причина, по которой лабораторная вводит третий сервис. С одним или двумя сервисами ApplicationSet — это `kubectl apply` с лишними шагами. С шестью сгенерированными Application ценность очевидна. Меньше 3 = игрушка; 3 = по-настоящему.
 
-### 4.2 — Write the ApplicationSet
+### 4.2 — Напишите ApplicationSet
 
-`YOUR TASK`: write `k8s/argocd/applicationset.yaml` that generates all six Applications. The kind, the outer `spec.generators` shape, and the destination server are shown; the **matrix body, the list elements, and every `{{...}}` placeholder reference inside the template are yours**.
+`ВАША ЗАДАЧА`: напишите `k8s/argocd/applicationset.yaml`, который генерирует все шесть Application. Kind, внешняя форма `spec.generators` и целевой сервер показаны; **тело matrix, элементы списков и каждая ссылка-плейсхолдер `{{...}}` внутри шаблона — за вами**.
 
 ```yaml
 # k8s/argocd/applicationset.yaml
@@ -323,113 +323,113 @@ metadata:
   name: all-apps
   namespace: argocd
 spec:
-  # goTemplate: true enables {{- if eq ... }} / | default — needed if you want
-  # per-env sync policy in ONE ApplicationSet. Default is fasttemplate (no logic).
-  goTemplate: YOUR-TASK                # true or false — your call, document it
+  # goTemplate: true включает {{- if eq ... }} / | default — нужно, если вы хотите
+  # политику синхронизации для каждой среды в ОДНОМ ApplicationSet. По умолчанию fasttemplate (без логики).
+  goTemplate: YOUR-TASK                # true или false — на ваш выбор, обоснуйте
   generators:
     - matrix:
         generators:
           - list:
               elements:
-                # YOUR-TASK: three rows, one per service. Each row needs at least:
-                #   svc:  short name  (e.g. app-python)
-                #   path: chart path in the repo (e.g. k8s/lab10-app)
+                # YOUR-TASK: три строки, по одной на сервис. Каждой строке нужно как минимум:
+                #   svc:  короткое имя  (например, app-python)
+                #   path: путь к чарту в репозитории (например, k8s/lab10-app)
                 - YOUR-TASK
                 - YOUR-TASK
                 - YOUR-TASK
           - list:
               elements:
-                # YOUR-TASK: two rows, one per env. Each row needs at least:
-                #   env:      dev or prod
-                #   autoSync: "true" / "false"  (you'll branch on this in the template)
+                # YOUR-TASK: две строки, по одной на среду. Каждой строке нужно как минимум:
+                #   env:      dev или prod
+                #   autoSync: "true" / "false"  (в шаблоне вы будете ветвиться по этому значению)
                 - YOUR-TASK
                 - YOUR-TASK
   template:
     metadata:
-      name: YOUR-TASK                  # use both generator values, e.g. {{.svc}}-{{.env}}
+      name: YOUR-TASK                  # используйте оба значения генератора, например {{.svc}}-{{.env}}
       finalizers:
         - resources-finalizer.argocd.argoproj.io
     spec:
       project: default
       source:
-        repoURL: YOUR-TASK             # your fork URL
-        targetRevision: YOUR-TASK      # branch for dev, tag for prod — see hint below
-        path: YOUR-TASK                # reference the path from the services list
+        repoURL: YOUR-TASK             # URL вашего форка
+        targetRevision: YOUR-TASK      # ветка для dev, тег для prod — см. подсказку ниже
+        path: YOUR-TASK                # сошлитесь на path из списка сервисов
         helm:
           valueFiles:
-            - YOUR-TASK                # e.g. values-{{.env}}.yaml
+            - YOUR-TASK                # например, values-{{.env}}.yaml
       destination:
         server: https://kubernetes.default.svc
-        namespace: YOUR-TASK           # reference the env value
+        namespace: YOUR-TASK           # сошлитесь на значение env
       syncPolicy:
-        # YOUR-TASK: ApplicationSet has no `if` in fasttemplate mode. Pick ONE:
-        #   (a) goTemplate: true above, then {{- if eq .autoSync "true" }}automated: {...}{{- end }}
-        #   (b) leave fasttemplate, write TWO ApplicationSets (one with `automated:`, one without)
-        #       and put the env list in each — three services per ApplicationSet.
-        # Whichever you pick, EXPLAIN it in docs/LAB13.md.
+        # YOUR-TASK: в режиме fasttemplate у ApplicationSet нет `if`. Выберите ОДИН вариант:
+        #   (a) goTemplate: true выше, затем {{- if eq .autoSync "true" }}automated: {...}{{- end }}
+        #   (b) оставьте fasttemplate, напишите ДВА ApplicationSet (один с `automated:`, один без)
+        #       и поместите список сред в каждый — три сервиса на ApplicationSet.
+        # Какой бы вариант вы ни выбрали, ОБЪЯСНИТЕ его в docs/LAB13.md.
         syncOptions:
           - CreateNamespace=true
           - ServerSideApply=true
 ```
 
-Pitfalls you must navigate while writing this (these are the actual gotchas — see Common Pitfalls at the bottom):
+Подводные камни, которые нужно обойти при написании (это настоящие ловушки — см. Типичные ошибки внизу):
 
-- **fasttemplate vs goTemplate.** The default templating engine (fasttemplate) is dumb string-substitution — `{{ values.foo | default "bar" }}` will break. Set `goTemplate: true` if you want pipes / `if` / `default`. The placeholder syntax also flips: `{{svc}}` → `{{.svc}}`.
-- **Per-env sync policy.** ArgoCD does not have an inline `if` in fasttemplate mode. You either flip on `goTemplate: true` (Go template `if`) or write **two** ApplicationSets. The hint above shows both — pick one.
-- **`targetRevision` per env.** If you use a Matrix List for envs, every Application gets the **same** `targetRevision` unless you put it in the env list element itself. Adding `targetRevision: main` for dev and `targetRevision: v1.0.0` for prod into the env-list rows is the cleanest fix.
+- **fasttemplate vs goTemplate.** Движок шаблонов по умолчанию (fasttemplate) — это тупая подстановка строк: `{{ values.foo | default "bar" }}` сломается. Установите `goTemplate: true`, если хотите pipes / `if` / `default`. Синтаксис плейсхолдеров тоже меняется: `{{svc}}` → `{{.svc}}`.
+- **Политика синхронизации для каждой среды.** В режиме fasttemplate у ArgoCD нет встроенного `if`. Вы либо включаете `goTemplate: true` (Go-шаблонный `if`), либо пишете **два** ApplicationSet. Подсказка выше показывает оба варианта — выберите один.
+- **`targetRevision` для каждой среды.** Если вы используете Matrix List для сред, каждая Application получает **один и тот же** `targetRevision`, если только не положить его в сам элемент списка сред. Добавление `targetRevision: main` для dev и `targetRevision: v1.0.0` для prod в строки списка сред — самое чистое решение.
 
-### 4.3 — Replace the six hand-written manifests
+### 4.3 — Замените шесть написанных вручную манифестов
 
-Once the ApplicationSet generates Applications whose names match the ones from Task 2/3 (`app-python-dev`, `echo-dev`, `health-dev`, `app-python-prod`, `echo-prod`, `health-prod`), `kubectl apply -f k8s/argocd/applicationset.yaml`, confirm with `kubectl get applications -n argocd` that exactly six show up, then **`git rm`** the six standalone files from `k8s/argocd/apps/` in the same PR.
+Когда ApplicationSet сгенерирует Application, имена которых совпадают с именами из задач 2/3 (`app-python-dev`, `echo-dev`, `health-dev`, `app-python-prod`, `echo-prod`, `health-prod`), выполните `kubectl apply -f k8s/argocd/applicationset.yaml`, убедитесь с помощью `kubectl get applications -n argocd`, что появилось ровно шесть, затем **`git rm`** шесть отдельных файлов из `k8s/argocd/apps/` в том же PR.
 
-If a standalone Application has the same name as a generated one, ArgoCD will refuse to take ownership — `kubectl delete app <name> -n argocd` first, then re-apply the ApplicationSet.
+Если у отдельной Application то же имя, что у сгенерированной, ArgoCD откажется брать её под управление — сначала выполните `kubectl delete app <name> -n argocd`, затем повторно примените ApplicationSet.
 
-### 4.4 — Prove the GitOps reconcile loop (selfHeal)
+### 4.4 — Докажите цикл согласования GitOps (selfHeal)
 
-`YOUR TASK`: trigger ArgoCD self-healing in **dev** and capture the evidence. Two scenarios:
+`ВАША ЗАДАЧА`: вызовите самовосстановление ArgoCD в **dev** и зафиксируйте доказательства. Два сценария:
 
-1. **Delete a workload** — select by label, not name (the rendered Deployment name is helper-dependent — for `app-python` with release `app-python-dev` and chart `lab10-app`, the canonical helper renders `app-python-dev-lab10-app-web`, not `app-python-dev`):
+1. **Удалите workload** — выбирайте по метке, а не по имени (имя отрендеренного Deployment зависит от helper-шаблона: для `app-python` с релизом `app-python-dev` и чартом `lab10-app` канонический helper рендерит `app-python-dev-lab10-app-web`, а не `app-python-dev`):
    ```bash
    kubectl delete deploy -l app.kubernetes.io/instance=app-python-dev -n dev
    ```
-   With `selfHeal: true`, ArgoCD recreates the Deployment within the next reconcile cycle (default 3 min; click REFRESH in the UI to do it sooner). This is **ArgoCD self-healing** (config drift → revert), distinct from Kubernetes self-healing (a deleted Pod gets recreated by its ReplicaSet).
-2. **Drift a label** — `kubectl label deploy -l app.kubernetes.io/instance=echo-dev -n dev owner=me --overwrite`. Watch the diff in the UI and the revert.
+   С `selfHeal: true` ArgoCD воссоздаёт Deployment в следующем цикле согласования (по умолчанию 3 минуты; нажмите REFRESH в UI, чтобы сделать это раньше). Это **самовосстановление ArgoCD** (дрейф конфигурации → откат), отличное от самовосстановления Kubernetes (удалённый Pod воссоздаётся его ReplicaSet).
+2. **Внесите дрейф в метку** — `kubectl label deploy -l app.kubernetes.io/instance=echo-dev -n dev owner=me --overwrite`. Наблюдайте diff в UI и откат.
 
-In `docs/LAB13.md`, explain the difference between Kubernetes self-healing (ReplicaSet → Pod) and ArgoCD self-healing (Git → cluster state). They operate at different layers; selfHeal would not save you from a CrashLoopBackOff.
+В `docs/LAB13.md` объясните разницу между самовосстановлением Kubernetes (ReplicaSet → Pod) и самовосстановлением ArgoCD (Git → состояние кластера). Они работают на разных уровнях; selfHeal не спасёт вас от CrashLoopBackOff.
 
-### 4.5 — Proof of work
+### 4.5 — Подтверждение работы
 
-**Paste into `docs/LAB13.md`:**
+**Вставьте в `docs/LAB13.md`:**
 
-- The full `applicationset.yaml` contents
-- A note on which path you took (goTemplate or two ApplicationSets) and why
-- `kubectl get app -n argocd -o wide` — **six** rows generated by `all-apps`, every one **Synced / Healthy**, all six pulled from Git with no manual `kubectl apply` of the workload
-- The two self-heal captures (delete + label drift) with timestamps showing the revert
-- One sentence on the K8s-vs-ArgoCD self-healing distinction
-
----
-
-## Bonus Task — Pick ONE Day-2 Capability (2 pts)
-
-`YOUR TASK`: pick **one** of the three problem statements below and ship it. Less hand-holding than the main tasks — you choose the design.
-
-### Option A — ArgoCD Notifications on sync failure
-
-Wire the **argocd-notifications-controller** (it's already in your install from Task 1) to fire a webhook when an Application's sync fails or its health degrades. The minimum bar: configure a trigger + template + a webhook delivery service (request-bin works offline) in `argocd-notifications-cm`, subscribe one Application via annotation, force a failure (push a manifest with a bogus image tag), and capture the alert payload.
-
-### Option B — Sync waves + a PreSync hook
-
-Order resources within a single Application so that a `Namespace` + `ConfigMap` come up at wave `-1`, the `Deployment` at wave `0`, and a `Service` at wave `1`. Add a **PreSync** hook `Job` (e.g. a fake "DB migration" that just `sleep 5; echo done`) with `hook-delete-policy: HookSucceeded` so the Job auto-cleans. Capture `kubectl get jobs -n dev` showing the hook ran and was deleted.
-
-### Option C — Multi-cluster: deploy `health` to a second k3d cluster
-
-Stand up a second k3d cluster (`k3d cluster create devops-edge`), register it with ArgoCD (`argocd cluster add <context>` — this creates a `Secret` in the `argocd` namespace with the kubeconfig), then write an ApplicationSet using the **Cluster** generator that deploys **only** `health` to clusters matching a label. Two clusters × one service = two new Applications.
-
-Whichever you pick, document the design in `docs/LAB13.md` (a paragraph), the change you made, and one piece of CLI evidence proving it worked.
+- Полное содержимое `applicationset.yaml`
+- Заметка о том, какой путь вы выбрали (goTemplate или два ApplicationSet) и почему
+- `kubectl get app -n argocd -o wide` — **шесть** строк, сгенерированных `all-apps`, каждая **Synced / Healthy**, все шесть взяты из Git без ручного `kubectl apply` рабочей нагрузки
+- Два снимка самовосстановления (удаление + дрейф метки) с отметками времени, показывающими откат
+- Одно предложение о различии самовосстановления K8s и ArgoCD
 
 ---
 
-## How to Submit
+## Бонусная задача — выберите ОДНУ Day-2-возможность (2 балла)
+
+`ВАША ЗАДАЧА`: выберите **одну** из трёх формулировок ниже и реализуйте её. Меньше подсказок, чем в основных задачах, — дизайн выбираете вы.
+
+### Вариант A — Уведомления ArgoCD при сбое синхронизации
+
+Настройте **argocd-notifications-controller** (он уже есть в вашей установке из задачи 1), чтобы он отправлял webhook при сбое синхронизации Application или ухудшении его health. Минимальная планка: настройте триггер + шаблон + сервис доставки webhook (request-bin работает офлайн) в `argocd-notifications-cm`, подпишите одну Application через аннотацию, вызовите сбой (запушьте манифест с неверным тегом образа) и зафиксируйте полезную нагрузку алерта.
+
+### Вариант B — Sync waves + хук PreSync
+
+Упорядочьте ресурсы внутри одной Application так, чтобы `Namespace` + `ConfigMap` поднимались на wave `-1`, `Deployment` — на wave `0`, а `Service` — на wave `1`. Добавьте хук **PreSync** `Job` (например, фейковую «миграцию БД», которая просто делает `sleep 5; echo done`) с `hook-delete-policy: HookSucceeded`, чтобы Job автоматически очищался. Зафиксируйте `kubectl get jobs -n dev`, показывающий, что хук выполнился и был удалён.
+
+### Вариант C — Мультикластерность: разверните `health` во втором кластере k3d
+
+Поднимите второй кластер k3d (`k3d cluster create devops-edge`), зарегистрируйте его в ArgoCD (`argocd cluster add <context>` — это создаёт `Secret` в пространстве имён `argocd` с kubeconfig), затем напишите ApplicationSet с генератором **Cluster**, который развёртывает **только** `health` в кластеры, совпадающие по метке. Два кластера × один сервис = две новые Application.
+
+Что бы вы ни выбрали, опишите дизайн в `docs/LAB13.md` (абзац), сделанное изменение и один фрагмент CLI-доказательства, подтверждающий, что это сработало.
+
+---
+
+## Как сдавать
 
 ```bash
 git switch -c lab13
@@ -438,125 +438,125 @@ git commit -m "feat(lab13): gitops with argocd 3.4 — applicationset for 3 serv
 git push -u origin lab13
 ```
 
-Open **two** PRs:
+Откройте **два** PR:
 
-- `your-fork:lab13` → `course-repo:master` *(reviewed)*
-- `your-fork:lab13` → `your-fork:master` *(merges into your own main when done)*
+- `your-fork:lab13` → `course-repo:master` *(проверяется)*
+- `your-fork:lab13` → `your-fork:master` *(сливается в ваш собственный main по завершении)*
 
-PR checklist:
+Чек-лист PR:
 
 ```text
-- [ ] Task 1 — ArgoCD 3.4 installed; chart version + server/CLI versions documented
-- [ ] Task 2 — three dev Applications, manual first sync, GitOps loop proven
-- [ ] Task 3 — six Applications across dev (auto) + prod (manual), tradeoff written up
-- [ ] Task 4 — ApplicationSet Matrix(List, List) replaces the six manifests; selfHeal proven
-- [ ] Bonus — Notifications / sync waves / multi-cluster (one of three)
+- [ ] Задача 1 — ArgoCD 3.4 установлен; версия чарта + версии сервера/CLI задокументированы
+- [ ] Задача 2 — три dev-Application, первая ручная синхронизация, цикл GitOps доказан
+- [ ] Задача 3 — шесть Application в dev (авто) + prod (вручную), компромисс описан
+- [ ] Задача 4 — ApplicationSet Matrix(List, List) заменяет шесть манифестов; selfHeal доказан
+- [ ] Бонус — Notifications / sync waves / мультикластерность (один из трёх)
 ```
 
 ---
 
-## Acceptance Criteria
+## Критерии приёмки
 
-### Task 1 (2 pts)
-- ✅ Chart version chosen has `appVersion` in **3.4.x** (visible in `helm search`)
-- ✅ `k8s/argocd/install/argocd-values.yaml` written, not vendored from a tutorial
-- ✅ `argocd version` reports **client + server both 3.4.x**
-- ✅ All core pods Running in `argocd` namespace
+### Задача 1 (2 балла)
+- ✅ Выбранная версия чарта имеет `appVersion` в **3.4.x** (видно в `helm search`)
+- ✅ `k8s/argocd/install/argocd-values.yaml` написан, а не скопирован из туториала
+- ✅ `argocd version` показывает **и клиент, и сервер 3.4.x**
+- ✅ Все основные pod'ы в состоянии Running в пространстве имён `argocd`
 
-### Task 2 (3 pts)
-- ✅ Three dev Applications written by hand under `k8s/argocd/apps/`
-- ✅ Each has `finalizers` and a real `repoURL` (your fork)
-- ✅ All three reach **Synced / Healthy** after a manual `argocd app sync`
-- ✅ GitOps loop proven: a Git commit caused a sync (history shows it)
+### Задача 2 (3 балла)
+- ✅ Три dev-Application написаны вручную в `k8s/argocd/apps/`
+- ✅ У каждой есть `finalizers` и настоящий `repoURL` (ваш форк)
+- ✅ Все три достигают **Synced / Healthy** после ручного `argocd app sync`
+- ✅ Цикл GitOps доказан: git-коммит вызвал синхронизацию (история это показывает)
 
-### Task 3 (3 pts)
-- ✅ `values-dev.yaml` and `values-prod.yaml` per chart, with **meaningful** deltas
-- ✅ Six Applications: dev with `automated:{prune,selfHeal}`, prod with **no** `automated:`
-- ✅ Prod `targetRevision` is a tag or `release/*` branch (not `main`)
-- ✅ 4–6 sentence operational tradeoff write-up in `docs/LAB13.md`
+### Задача 3 (3 балла)
+- ✅ `values-dev.yaml` и `values-prod.yaml` для каждого чарта с **осмысленными** отличиями
+- ✅ Шесть Application: dev с `automated:{prune,selfHeal}`, prod **без** `automated:`
+- ✅ Prod `targetRevision` — тег или ветка `release/*` (не `main`)
+- ✅ Описание операционного компромисса на 4–6 предложений в `docs/LAB13.md`
 
-### Task 4 (2 pts)
-- ✅ One `ApplicationSet` with a Matrix(List × List) generator under `k8s/argocd/`
-- ✅ Generates **six** Applications whose names match the Task-3 ones
-- ✅ Standalone Task-3 manifests removed in the same PR
-- ✅ Per-env sync policy handled (goTemplate `if` OR two ApplicationSets) and explained
-- ✅ selfHeal proven with delete + label-drift captures
+### Задача 4 (2 балла)
+- ✅ Один `ApplicationSet` с генератором Matrix(List × List) в `k8s/argocd/`
+- ✅ Генерирует **шесть** Application, имена которых совпадают с именами из задачи 3
+- ✅ Отдельные манифесты из задачи 3 удалены в том же PR
+- ✅ Политика синхронизации для каждой среды реализована (goTemplate `if` ИЛИ два ApplicationSet) и объяснена
+- ✅ selfHeal доказан снимками удаления + дрейфа метки
 
-### Bonus (2 pts)
-- ✅ One option fully wired (Notifications, sync waves, or multi-cluster)
-- ✅ Real evidence — alert payload, hook Job logs, or second-cluster pod list
+### Бонус (2 балла)
+- ✅ Один вариант полностью настроен (Notifications, sync waves или мультикластерность)
+- ✅ Настоящие доказательства — полезная нагрузка алерта, логи Job-хука или список pod'ов второго кластера
 
 ---
 
-## Rubric
+## Рубрика
 
-| Task | Points | Criteria |
+| Задача | Баллы | Критерии |
 |------|-------:|----------|
-| **Task 1** — Install ArgoCD 3.4 | **2** | Pinned chart with 3.4.x appVersion, hand-written values, UI + CLI verified |
-| **Task 2** — Three Application CRDs | **3** | Hand-written app-python/echo/health dev Applications; manual sync; GitOps loop |
-| **Task 3** — Multi-env (dev auto / prod manual) | **3** | Six Applications, distinct values, prod pinned, tradeoff written up |
-| **Task 4** — ApplicationSet Matrix(List, List) | **2** | One template generates 6 apps; selfHeal proven; standalone manifests removed |
-| **Bonus** — Day-2 capability | **2** | Notifications OR sync waves OR multi-cluster — pick one and prove it |
-| **Total** | **12** | 10 main + 2 bonus |
+| **Задача 1** — Установка ArgoCD 3.4 | **2** | Зафиксированный чарт с appVersion 3.4.x, values написаны вручную, UI + CLI проверены |
+| **Задача 2** — Три CRD Application | **3** | Написанные вручную dev-Application app-python/echo/health; ручная синхронизация; цикл GitOps |
+| **Задача 3** — Мультисредовость (dev авто / prod вручную) | **3** | Шесть Application, различающиеся values, prod зафиксирован, компромисс описан |
+| **Задача 4** — ApplicationSet Matrix(List, List) | **2** | Один шаблон генерирует 6 приложений; selfHeal доказан; отдельные манифесты удалены |
+| **Бонус** — Day-2-возможность | **2** | Notifications ИЛИ sync waves ИЛИ мультикластерность — выберите одно и докажите |
+| **Итого** | **12** | 10 основных + 2 бонусных |
 
 ---
 
-## Resources
+## Ресурсы
 
 <details>
-<summary>📚 Documentation (ArgoCD 3.x)</summary>
+<summary>📚 Документация (ArgoCD 3.x)</summary>
 
-- [ArgoCD Documentation](https://argo-cd.readthedocs.io/en/stable/) (3.x)
-- [argo-helm chart — version / appVersion mapping](https://github.com/argoproj/argo-helm/tree/main/charts/argo-cd)
-- [Declarative Setup (Application CRD)](https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/)
-- [Automated Sync, selfHeal, prune](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/)
-- [ApplicationSet — Generators](https://argo-cd.readthedocs.io/en/stable/operator-manual/applicationset/Generators/)
-- [Sync Waves & Resource Hooks](https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/)
-- [Notifications](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/)
-- [OpenGitOps — the four principles](https://opengitops.dev/)
+- [Документация ArgoCD](https://argo-cd.readthedocs.io/en/stable/) (3.x)
+- [Чарт argo-helm — соответствие version / appVersion](https://github.com/argoproj/argo-helm/tree/main/charts/argo-cd)
+- [Декларативная настройка (Application CRD)](https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/)
+- [Автоматическая синхронизация, selfHeal, prune](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/)
+- [ApplicationSet — генераторы](https://argo-cd.readthedocs.io/en/stable/operator-manual/applicationset/Generators/)
+- [Sync Waves и хуки ресурсов](https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/)
+- [Уведомления](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/)
+- [OpenGitOps — четыре принципа](https://opengitops.dev/)
 
 </details>
 
 <details>
-<summary>📦 Course plumbing</summary>
+<summary>📦 Служебные компоненты курса</summary>
 
-- `plumbing/health/README.md` — the **third** service (port 8082, `ghcr.io/inno-devops-labs/health:v1`)
-- `plumbing/echo/README.md` — the second service (port 8081, `ghcr.io/inno-devops-labs/echo:v1`)
-
-</details>
-
-<details>
-<summary>⚠️ Common Pitfalls (from real dry-runs)</summary>
-
-- **`kubectl apply -f install.yaml` returns non-zero on the first pass.** ArgoCD ships `Application`/`AppProject` CRDs alongside CRs that *use* them; the CRs are applied before their CRDs are Established. Workaround: **apply twice**, or `kubectl apply --server-side`. This isn't an ArgoCD bug — it's how `kubectl apply -f` orders resources alphabetically. The Helm install in Task 1 sidesteps this because Helm orders resources by kind.
-- **`prune: true` deleting a manually-applied Secret.** Classic "where did my Secret go" trap: you `kubectl apply -f my-secret.yaml` in `dev`, ArgoCD reconciles, sees the Secret in the cluster but not in Git, marks it for pruning, and deletes it on the next sync. Either commit the Secret to Git (encrypted — use the Lab 11 OpenBao pattern) or move it to a namespace ArgoCD doesn't manage. Don't disable `prune` to "fix" it — that hides drift.
-- **`selfHeal: true` masking real bugs.** A pod with a wrong env var crashes, you `kubectl set env` to fix it during an incident; 3 minutes later selfHeal reverts and you're crashing again. selfHeal is *reverting* drift from Git — the fix has to go *into* Git. Symptom: "every 3 minutes the pod recovers and then breaks again" — that's selfHeal doing its job, not a bug.
-- **Repo permissions.** Public HTTPS repo works with no credentials. Private repo needs either: (a) HTTPS + a GitHub PAT registered as an `argocd-repo-creds` Secret, or (b) SSH + a deploy key. Without credentials, the Application shows `Unknown` sync status and `repo-server` logs say `authentication required`. The UI's "Repository Connection Status" panel under Settings → Repositories is the fastest debugger.
-- **ApplicationSet `goTemplate: true` vs default fasttemplate.** Fasttemplate is dumb string substitution — `{{ values.foo | default "bar" }}` does **not** parse and you'll get a literal `default` string in your manifest. Set `goTemplate: true` to use Sprig-style pipes, `if`, `default`. The placeholder syntax also changes: fasttemplate uses `{{svc}}`, goTemplate uses `{{.svc}}`. The `controller` logs say `template: ...` when this is the bug.
-- **Forgetting the `finalizers:` block.** `kubectl delete app health-dev -n argocd` removes the Application CR but **leaves** the underlying Deployment + Service in the `dev` namespace. Without the finalizer, ArgoCD never gets the chance to cascade-delete the workload. Add it from day 1.
-- **`targetRevision: main` on prod.** Every merge to main silently deploys to prod. Pin to a tag or a `release/*` branch — that's why prod exists separately.
+- `plumbing/health/README.md` — **третий** сервис (порт 8082, `ghcr.io/inno-devops-labs/health:v1`)
+- `plumbing/echo/README.md` — второй сервис (порт 8081, `ghcr.io/inno-devops-labs/echo:v1`)
 
 </details>
 
 <details>
-<summary>🛠️ Tools worth knowing</summary>
+<summary>⚠️ Типичные ошибки (из реальных прогонов)</summary>
 
-- [`argocd` CLI](https://argo-cd.readthedocs.io/en/stable/cli_installation/) — install the same patch as the server
-- [`argocd app diff`](https://argo-cd.readthedocs.io/en/stable/user-guide/commands/argocd_app_diff/) — inspect drift before a sync
-- [`argocd app history` / `rollback`](https://argo-cd.readthedocs.io/en/stable/user-guide/commands/argocd_app_history/) — per-app revision history
-- [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) — encrypt Secrets into Git
-- [External Secrets Operator](https://external-secrets.io/) — pulls Secret values from OpenBao/Vault/AWS SM (Lab 11 path)
+- **`kubectl apply -f install.yaml` возвращает ненулевой код при первом проходе.** ArgoCD поставляет CRD `Application`/`AppProject` вместе с CR, которые их *используют*; CR применяются раньше, чем их CRD переходят в Established. Обходной путь: **применить дважды** или `kubectl apply --server-side`. Это не баг ArgoCD — так `kubectl apply -f` упорядочивает ресурсы по алфавиту. Установка через Helm в задаче 1 обходит это, потому что Helm упорядочивает ресурсы по kind.
+- **`prune: true` удаляет применённый вручную Secret.** Классическая ловушка «куда делся мой Secret»: вы делаете `kubectl apply -f my-secret.yaml` в `dev`, ArgoCD согласовывает, видит Secret в кластере, но не в Git, помечает его на удаление и удаляет при следующей синхронизации. Либо закоммитьте Secret в Git (в зашифрованном виде — используйте паттерн OpenBao из лабораторной 11), либо перенесите его в пространство имён, которым ArgoCD не управляет. Не отключайте `prune`, чтобы «исправить» это, — так вы скрываете дрейф.
+- **`selfHeal: true` маскирует настоящие баги.** Pod с неверной переменной окружения падает, вы делаете `kubectl set env`, чтобы исправить это во время инцидента; через 3 минуты selfHeal откатывает изменение, и вы снова падаете. selfHeal *откатывает* дрейф к состоянию из Git — исправление должно попасть *в* Git. Симптом: «каждые 3 минуты pod восстанавливается, а затем снова ломается» — это selfHeal делает свою работу, а не баг.
+- **Права на репозиторий.** Публичный HTTPS-репозиторий работает без учётных данных. Приватному нужен либо (а) HTTPS + GitHub PAT, зарегистрированный как Secret `argocd-repo-creds`, либо (б) SSH + deploy key. Без учётных данных Application показывает статус синхронизации `Unknown`, а логи `repo-server` говорят `authentication required`. Панель «Repository Connection Status» в UI в разделе Settings → Repositories — самый быстрый инструмент отладки.
+- **ApplicationSet `goTemplate: true` vs fasttemplate по умолчанию.** Fasttemplate — тупая подстановка строк: `{{ values.foo | default "bar" }}` **не** парсится, и в манифесте вы получите буквальную строку `default`. Установите `goTemplate: true`, чтобы использовать pipes в стиле Sprig, `if`, `default`. Синтаксис плейсхолдеров тоже меняется: fasttemplate использует `{{svc}}`, goTemplate — `{{.svc}}`. Когда баг в этом, логи `controller` содержат `template: ...`.
+- **Забытый блок `finalizers:`.** `kubectl delete app health-dev -n argocd` удаляет CR Application, но **оставляет** нижележащие Deployment + Service в пространстве имён `dev`. Без finalizer у ArgoCD никогда не появляется шанс каскадно удалить рабочую нагрузку. Добавляйте его с первого дня.
+- **`targetRevision: main` для prod.** Каждый мерж в main незаметно развёртывается в prod. Зафиксируйте тег или ветку `release/*` — вот почему prod существует отдельно.
+
+</details>
+
+<details>
+<summary>🛠️ Инструменты, которые стоит знать</summary>
+
+- [`argocd` CLI](https://argo-cd.readthedocs.io/en/stable/cli_installation/) — установите тот же патч, что и сервер
+- [`argocd app diff`](https://argo-cd.readthedocs.io/en/stable/user-guide/commands/argocd_app_diff/) — посмотреть дрейф перед синхронизацией
+- [`argocd app history` / `rollback`](https://argo-cd.readthedocs.io/en/stable/user-guide/commands/argocd_app_history/) — история ревизий для каждого приложения
+- [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) — шифрование Secret в Git
+- [External Secrets Operator](https://external-secrets.io/) — получает значения Secret из OpenBao/Vault/AWS SM (путь лабораторной 11)
 
 </details>
 
 ---
 
-## Looking Ahead
+## Взгляд вперёд
 
-| Lab | What it adds to this service |
+| Лабораторная | Что она добавляет этому сервису |
 |---:|---|
-| 14 | Replace the `Deployment` in each chart with an Argo `Rollout` — canary `25→50→75→100` and blue-green |
-| 15 | StatefulSets for stateful workloads (stable identity, headless Service, per-pod PVC) |
-| 16 | kube-prometheus-stack — scrape `health` and `echo` `/metrics` via `ServiceMonitor` |
+| 14 | Заменяет `Deployment` в каждом чарте на Argo `Rollout` — canary `25→50→75→100` и blue-green |
+| 15 | StatefulSet'ы для stateful-нагрузок (стабильная идентичность, headless-сервис, PVC на каждый pod) |
+| 16 | kube-prometheus-stack — сбор `/metrics` у `health` и `echo` через `ServiceMonitor` |
 
-The cluster now reaches out to Git; nothing reaches in. From here on, every change you ship is a pull request that ArgoCD discovers and reconciles. From "I deployed it" to "Git deployed it" — one merge at a time. 🔄
+Теперь кластер обращается к Git; внутрь никто не заходит. С этого момента каждое изменение, которое вы доставляете, — это pull request, который ArgoCD обнаруживает и согласовывает. От «я это развернул» к «Git это развернул» — по одному мержу за раз. 🔄
