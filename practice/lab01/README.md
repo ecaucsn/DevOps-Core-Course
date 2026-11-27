@@ -5,6 +5,13 @@
 
 Правило: наставник даёт только вопросы/подсказки. Пишете вы.
 
+## Стенд
+
+Откройте браузерный VS Code: **http://localhost:8011** (пароль — в
+`~/.config/code-server/config.yaml`). Затем *Open Folder* →
+`/home/userdso/course/DevOps-Core-Course` → папка `practice/lab01`. Терминал: `Ctrl+`` `.
+Если стенд не запущен: `bash scripts/study-stand.sh`.
+
 ## Как работать
 
 1. Здесь же создайте `venv` и файлы (см. шаги).

@@ -29,6 +29,9 @@ python3 -m http.server 8010
 
 ## Как это связано с обучением
 
+Для написания кода используйте браузерный VS Code (code-server): <http://localhost:8011>
+(пароль — в `~/.config/code-server/config.yaml`, запуск — `bash scripts/study-stand.sh`).
+
 Дашборд — только навигация и трекер. Код пишете вы. Протокол обучения, правило
 подсказок и карта чтения — в [`../LEARNING.md`](../LEARNING.md). Практика
 пересборки лаб. 1 — в [`../practice/lab01/`](../practice/lab01/).
